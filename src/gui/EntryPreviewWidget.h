@@ -28,6 +28,8 @@ namespace Ui
     class EntryPreviewWidget;
 }
 
+class QTextEdit;
+
 class EntryPreviewWidget : public QWidget
 {
     Q_OBJECT
@@ -54,7 +56,7 @@ private slots:
     void setPasswordVisible(bool state);
     void setEntryNotesVisible(bool state);
     void setGroupNotesVisible(bool state);
-    void setNotesVisible(QLabel* notesLabel, const QString& notes, bool state);
+    void setNotesVisible(QTextEdit* notesWidget, const QString& notes, bool state);
 
     void updateGroupHeaderLine();
     void updateGroupGeneralTab();
@@ -70,13 +72,12 @@ private:
     void removeTab(QTabWidget* tabWidget, QWidget* widget);
     void setTabEnabled(QTabWidget* tabWidget, QWidget* widget, bool enabled);
 
-    static QPixmap preparePixmap(const QPixmap& pixmap, int size);
     static QString hierarchy(const Group* group, const QString& title);
 
     const QScopedPointer<Ui::EntryPreviewWidget> m_ui;
     bool m_locked;
-    Entry* m_currentEntry;
-    Group* m_currentGroup;
+    QPointer<Entry> m_currentEntry;
+    QPointer<Group> m_currentGroup;
     QTimer m_totpTimer;
     quint8 m_selectedTabEntry;
     quint8 m_selectedTabGroup;

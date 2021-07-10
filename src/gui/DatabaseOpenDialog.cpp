@@ -20,17 +20,25 @@
 #include "DatabaseWidget.h"
 #include "core/Database.h"
 
+#ifdef Q_OS_WIN
+#include <QtPlatformHeaders/QWindowsWindowFunctions>
+#endif
+
 DatabaseOpenDialog::DatabaseOpenDialog(QWidget* parent)
     : QDialog(parent)
     , m_view(new DatabaseOpenWidget(this))
 {
     setWindowTitle(tr("Unlock Database - KeePassXC"));
-#ifdef Q_OS_MACOS
-    setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
-#else
-    setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint | Qt::ForeignWindow);
+    setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint);
+#ifdef Q_OS_WIN
+    QWindowsWindowFunctions::setWindowActivationBehavior(QWindowsWindowFunctions::AlwaysActivateWindow);
 #endif
     connect(m_view, SIGNAL(dialogFinished(bool)), this, SLOT(complete(bool)));
+    auto* layout = new QVBoxLayout();
+    layout->setMargin(0);
+    setLayout(layout);
+    layout->addWidget(m_view);
+    setMinimumWidth(700);
 }
 
 void DatabaseOpenDialog::setFilePath(const QString& filePath)
@@ -49,7 +57,7 @@ void DatabaseOpenDialog::setTargetDatabaseWidget(DatabaseWidget* dbWidget)
         disconnect(this, nullptr, m_dbWidget, nullptr);
     }
     m_dbWidget = dbWidget;
-    connect(this, SIGNAL(dialogFinished(bool)), dbWidget, SLOT(unlockDatabase(bool)));
+    connect(this, &DatabaseOpenDialog::dialogFinished, dbWidget, &DatabaseWidget::unlockDatabase);
 }
 
 void DatabaseOpenDialog::setIntent(DatabaseOpenDialog::Intent intent)
@@ -88,6 +96,6 @@ void DatabaseOpenDialog::complete(bool accepted)
     } else {
         reject();
     }
-    emit dialogFinished(accepted);
+    emit dialogFinished(accepted, m_dbWidget);
     clearForms();
 }

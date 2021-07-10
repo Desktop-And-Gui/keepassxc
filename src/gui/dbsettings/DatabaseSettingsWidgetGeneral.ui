@@ -38,7 +38,7 @@
    <item>
     <widget class="QGroupBox" name="groupBox">
      <property name="title">
-      <string>Database Meta Data</string>
+      <string>Database Metadata</string>
      </property>
      <layout class="QFormLayout" name="formLayout">
       <item row="0" column="0">
@@ -183,7 +183,7 @@
       <item>
        <widget class="QCheckBox" name="compressionCheckbox">
         <property name="text">
-         <string>Enable &amp;compression (recommended)</string>
+         <string>Enable compression (recommended)</string>
         </property>
         <property name="checked">
          <bool>true</bool>

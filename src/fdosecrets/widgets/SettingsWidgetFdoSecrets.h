@@ -18,18 +18,13 @@
 #ifndef KEEPASSXC_SETTINGSWIDGETFDOSECRETS_H
 #define KEEPASSXC_SETTINGSWIDGETFDOSECRETS_H
 
+#include "gui/MessageWidget.h"
+
 #include <QScopedPointer>
+#include <QTimer>
 #include <QWidget>
 
-class QTableWidgetItem;
-
-namespace FdoSecrets
-{
-
-    class Session;
-    class Collection;
-
-} // namespace FdoSecrets
+class QAbstractItemView;
 
 class FdoSecretsPlugin;
 
@@ -49,28 +44,17 @@ public slots:
     void saveSettings();
 
 private slots:
-    void populateSessions(bool enabled);
-    void populateDatabases(bool enabled);
-    void addSessionRow(FdoSecrets::Session* sess);
-    void removeSessionRow(FdoSecrets::Session* sess);
-    void addDatabaseRow(FdoSecrets::Collection* coll);
-    void removeDatabaseRow(FdoSecrets::Collection* coll);
-
-    void updateTables(bool enabled);
+    void checkDBusName();
+    void updateServiceState();
 
 protected:
     void showEvent(QShowEvent* event) override;
-
     void hideEvent(QHideEvent* event) override;
-
-private:
-    QWidget* createManageButtons(FdoSecrets::Collection* coll);
-
-    void updateExposedGroupItem(QTableWidgetItem* item, FdoSecrets::Collection* coll);
 
 private:
     QScopedPointer<Ui::SettingsWidgetFdoSecrets> m_ui;
     FdoSecretsPlugin* m_plugin;
+    QTimer m_checkTimer;
 };
 
 #endif // KEEPASSXC_SETTINGSWIDGETFDOSECRETS_H

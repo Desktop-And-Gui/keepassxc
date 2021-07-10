@@ -22,6 +22,7 @@
 #include "core/Global.h"
 
 #include <QObject>
+#include <QProcessEnvironment>
 #include <QString>
 #include <QUuid>
 
@@ -41,12 +42,15 @@ namespace Tools
     bool isBase64(const QByteArray& ba);
     void sleep(int ms);
     void wait(int ms);
+    bool checkUrlValid(const QString& urlField);
     QString uuidToHex(const QUuid& uuid);
     QUuid hexToUuid(const QString& uuid);
     QRegularExpression convertToRegex(const QString& string,
                                       bool useWildcards = false,
                                       bool exactMatch = false,
                                       bool caseSensitive = false);
+    QString envSubstitute(const QString& filepath,
+                          QProcessEnvironment environment = QProcessEnvironment::systemEnvironment());
 
     template <typename RandomAccessIterator, typename T>
     RandomAccessIterator binaryFind(RandomAccessIterator begin, RandomAccessIterator end, const T& value)
@@ -59,34 +63,6 @@ namespace Tools
             return it;
         }
     }
-
-    template <typename Key, typename Value, void deleter(Value)> struct Map
-    {
-        QMap<Key, Value> values;
-        Value& operator[](const Key index)
-        {
-            return values[index];
-        }
-
-        ~Map()
-        {
-            for (Value m : values) {
-                deleter(m);
-            }
-        }
-    };
-
-    struct Buffer
-    {
-        unsigned char* raw;
-        size_t size;
-
-        Buffer();
-        ~Buffer();
-
-        void clear();
-        QByteArray content() const;
-    };
 
     inline int qtRuntimeVersion()
     {

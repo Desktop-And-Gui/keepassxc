@@ -37,9 +37,6 @@ class TestGui : public QObject
 {
     Q_OBJECT
 
-protected slots:
-    void createDatabaseCallback();
-
 private slots:
     void initTestCase();
     void init();
@@ -64,16 +61,18 @@ private slots:
     void testDragAndDropEntry();
     void testDragAndDropGroup();
     void testSaveAs();
+    void testSaveBackup();
     void testSave();
     void testDatabaseSettings();
     void testKeePass1Import();
     void testDatabaseLocking();
     void testDragAndDropKdbxFiles();
     void testSortGroups();
+    void testAutoType();
     void testTrayRestoreHide();
 
 private:
-    int addCannedEntries();
+    void addCannedEntries();
     void checkDatabase(QString dbFileName = "");
     void triggerAction(const QString& name);
     void dragAndDropGroup(const QModelIndex& sourceIndex,

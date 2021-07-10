@@ -34,6 +34,7 @@ class DatabaseOpenWidget;
 class KeePass1OpenWidget;
 class OpVaultOpenWidget;
 class DatabaseSettingsDialog;
+class ReportsDialog;
 class Database;
 class FileWatcher;
 class EditEntryWidget;
@@ -73,14 +74,20 @@ public:
 
     explicit DatabaseWidget(QSharedPointer<Database> db, QWidget* parent = nullptr);
     explicit DatabaseWidget(const QString& filePath, QWidget* parent = nullptr);
-    ~DatabaseWidget();
+    ~DatabaseWidget() override;
+
+    void setFocus(Qt::FocusReason reason);
 
     QSharedPointer<Database> database() const;
 
     DatabaseWidget::Mode currentMode() const;
     bool isLocked() const;
+    bool isSaving() const;
+    bool isSorted() const;
     bool isSearchActive() const;
+    bool isEntryViewActive() const;
     bool isEntryEditActive() const;
+    bool isGroupEditActive() const;
 
     QString getCurrentSearch();
     void refreshSearch();
@@ -93,21 +100,21 @@ public:
     bool isGroupSelected() const;
     bool isRecycleBinSelected() const;
     int numberOfSelectedEntries() const;
+    int currentEntryIndex() const;
 
     QStringList customEntryAttributes() const;
     bool isEditWidgetModified() const;
-    bool isUsernamesHidden() const;
-    void setUsernamesHidden(bool hide);
-    bool isPasswordsHidden() const;
-    void setPasswordsHidden(bool hide);
     void clearAllWidgets();
-    bool currentEntryHasFocus();
+    Entry* currentSelectedEntry();
     bool currentEntryHasTitle();
     bool currentEntryHasUsername();
     bool currentEntryHasPassword();
     bool currentEntryHasUrl();
     bool currentEntryHasNotes();
     bool currentEntryHasTotp();
+#ifdef WITH_XC_SSHAGENT
+    bool currentEntryHasSshKey();
+#endif
 
     QByteArray entryViewState() const;
     bool setEntryViewState(const QByteArray& state) const;
@@ -150,13 +157,17 @@ public slots:
     bool lock();
     bool save();
     bool saveAs();
+    bool saveBackup();
 
     void replaceDatabase(QSharedPointer<Database> db);
     void createEntry();
     void cloneEntry();
     void deleteSelectedEntries();
-    void deleteEntries(QList<Entry*> entries);
-    void setFocus();
+    void deleteEntries(QList<Entry*> entries, bool confirm = true);
+    void focusOnEntries(bool editIfFocused = false);
+    void focusOnGroups(bool editIfFocused = false);
+    void moveEntryUp();
+    void moveEntryDown();
     void copyTitle();
     void copyUsername();
     void copyPassword();
@@ -167,7 +178,15 @@ public slots:
     void showTotpKeyQrCode();
     void copyTotp();
     void setupTotp();
-    void performAutoType();
+#ifdef WITH_XC_SSHAGENT
+    void addToAgent();
+    void removeFromAgent();
+#endif
+    void performAutoType(const QString& sequence = {});
+    void performAutoTypeUsername();
+    void performAutoTypeUsernameEnter();
+    void performAutoTypePassword();
+    void performAutoTypePasswordEnter();
     void openUrl();
     void downloadSelectedFavicons();
     void downloadAllFavicons();
@@ -179,7 +198,8 @@ public slots:
     void switchToGroupEdit();
     void sortGroupsAsc();
     void sortGroupsDesc();
-    void switchToMasterKeyChange();
+    void switchToDatabaseSecurity();
+    void switchToDatabaseReports();
     void switchToDatabaseSettings();
     void switchToOpenDatabase();
     void switchToOpenDatabase(const QString& filePath);
@@ -207,6 +227,7 @@ public slots:
 protected:
     void closeEvent(QCloseEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    bool focusNextPrevChild(bool next) override;
 
 private slots:
     void entryActivationSignalReceived(Entry* entry, EntryModel::ModelColumn column);
@@ -218,7 +239,7 @@ private slots:
     void emitGroupContextMenuRequested(const QPoint& pos);
     void emitEntryContextMenuRequested(const QPoint& pos);
     void onEntryChanged(Entry* entry);
-    void onGroupChanged(Group* group);
+    void onGroupChanged();
     void onDatabaseModified();
     void connectDatabaseSignals();
     void loadDatabase(bool accepted);
@@ -233,9 +254,9 @@ private:
     int addChildWidget(QWidget* w);
     void setClipboardTextAndMinimize(const QString& text);
     void processAutoOpen();
-    bool confirmDeleteEntries(QList<Entry*> entries, bool permanent);
+    void openDatabaseFromEntry(const Entry* entry, bool inBackground = true);
     void performIconDownloads(const QList<Entry*>& entries, bool force = false);
-    Entry* currentSelectedEntry();
+    bool performSave(QString& errorMessage, const QString& fileName = {});
 
     QSharedPointer<Database> m_db;
 
@@ -250,6 +271,7 @@ private:
     QPointer<EditEntryWidget> m_editEntryWidget;
     QPointer<EditGroupWidget> m_editGroupWidget;
     QPointer<EditEntryWidget> m_historyEditEntryWidget;
+    QPointer<ReportsDialog> m_reportsDialog;
     QPointer<DatabaseSettingsDialog> m_databaseSettingDialog;
     QPointer<DatabaseOpenWidget> m_databaseOpenWidget;
     QPointer<KeePass1OpenWidget> m_keepass1OpenWidget;
@@ -267,7 +289,7 @@ private:
     int m_saveAttempts;
 
     // Search state
-    EntrySearcher* m_EntrySearcher;
+    QScopedPointer<EntrySearcher> m_entrySearcher;
     QString m_lastSearchText;
     bool m_searchLimitGroup;
 

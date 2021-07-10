@@ -1117,14 +1117,14 @@ void TestMerge::testMergeCustomIcons()
 
     dbSource->metadata()->addCustomIcon(customIconId, customIcon);
     // Sanity check.
-    QVERIFY(dbSource->metadata()->containsCustomIcon(customIconId));
+    QVERIFY(dbSource->metadata()->hasCustomIcon(customIconId));
 
     m_clock->advanceSecond(1);
 
     Merger merger(dbSource.data(), dbDestination.data());
     merger.merge();
 
-    QVERIFY(dbDestination->metadata()->containsCustomIcon(customIconId));
+    QVERIFY(dbDestination->metadata()->hasCustomIcon(customIconId));
 }
 
 /**
@@ -1143,16 +1143,16 @@ void TestMerge::testMergeDuplicateCustomIcons()
     dbSource->metadata()->addCustomIcon(customIconId, customIcon);
     dbDestination->metadata()->addCustomIcon(customIconId, customIcon);
     // Sanity check.
-    QVERIFY(dbSource->metadata()->containsCustomIcon(customIconId));
-    QVERIFY(dbDestination->metadata()->containsCustomIcon(customIconId));
+    QVERIFY(dbSource->metadata()->hasCustomIcon(customIconId));
+    QVERIFY(dbDestination->metadata()->hasCustomIcon(customIconId));
 
     m_clock->advanceSecond(1);
 
     Merger merger(dbSource.data(), dbDestination.data());
     merger.merge();
 
-    QVERIFY(dbDestination->metadata()->containsCustomIcon(customIconId));
-    QCOMPARE(dbDestination->metadata()->customIcons().count(), 1);
+    QVERIFY(dbDestination->metadata()->hasCustomIcon(customIconId));
+    QCOMPARE(dbDestination->metadata()->customIconsOrder().count(), 1);
 }
 
 void TestMerge::testMetadata()
@@ -1479,7 +1479,7 @@ void TestMerge::testMergeNotModified()
     QScopedPointer<Database> dbSource(
         createTestDatabaseStructureClone(dbDestination.data(), Entry::CloneNoFlags, Group::CloneIncludeEntries));
 
-    QSignalSpy modifiedSignalSpy(dbDestination.data(), SIGNAL(databaseModified()));
+    QSignalSpy modifiedSignalSpy(dbDestination.data(), SIGNAL(modified()));
     Merger merger(dbSource.data(), dbDestination.data());
     merger.merge();
     QTRY_VERIFY(modifiedSignalSpy.empty());
@@ -1491,7 +1491,7 @@ void TestMerge::testMergeModified()
     QScopedPointer<Database> dbSource(
         createTestDatabaseStructureClone(dbDestination.data(), Entry::CloneNoFlags, Group::CloneIncludeEntries));
 
-    QSignalSpy modifiedSignalSpy(dbDestination.data(), SIGNAL(databaseModified()));
+    QSignalSpy modifiedSignalSpy(dbDestination.data(), SIGNAL(modified()));
     // Make sure the two changes have a different timestamp.
     QTest::qSleep(1);
     Entry* entry = dbSource->rootGroup()->findEntryByPath("entry1");

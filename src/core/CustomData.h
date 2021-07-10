@@ -23,7 +23,9 @@
 #include <QSet>
 #include <QStringList>
 
-class CustomData : public QObject
+#include "core/ModifiableObject.h"
+
+class CustomData : public ModifiableObject
 {
     Q_OBJECT
 
@@ -43,13 +45,17 @@ public:
     int dataSize() const;
     void copyDataFrom(const CustomData* other);
     QDateTime getLastModified() const;
+    bool isProtectedCustomData(const QString& key) const;
     bool operator==(const CustomData& other) const;
     bool operator!=(const CustomData& other) const;
 
     static const QString LastModified;
+    static const QString Created;
+    static const QString BrowserKeyPrefix;
+    static const QString BrowserLegacyKeyPrefix;
+    static const QString ExcludeFromReports;
 
 signals:
-    void customDataModified();
     void aboutToBeAdded(const QString& key);
     void added(const QString& key);
     void aboutToBeRemoved(const QString& key);
@@ -58,7 +64,6 @@ signals:
     void renamed(const QString& oldKey, const QString& newKey);
     void aboutToBeReset();
     void reset();
-    void lastModified();
 
 private slots:
     void updateLastModified();

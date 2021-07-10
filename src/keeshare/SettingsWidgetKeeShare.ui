@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>378</width>
-    <height>508</height>
+    <height>511</height>
    </rect>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout" stretch="0,0,0,0">
@@ -79,72 +79,10 @@
      <property name="title">
       <string>Own certificate</string>
      </property>
-     <layout class="QGridLayout" name="gridLayout_2" columnstretch="0,1,1">
-      <item row="5" column="0">
-       <widget class="QLabel" name="ownCertificateFingerprintLabel">
-        <property name="text">
-         <string>Fingerprint:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="3" column="1" colspan="2">
-       <widget class="QLineEdit" name="ownCertificatePrivateKeyEdit">
-        <property name="accessibleName">
-         <string>Key</string>
-        </property>
-        <property name="readOnly">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item row="4" column="0">
-       <widget class="QLabel" name="ownCertificatePublicKeyLabel">
-        <property name="text">
-         <string>Certificate:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="0">
-       <widget class="QLabel" name="ownCertificateSignerLabel">
-        <property name="text">
-         <string>Signer:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="3" column="0">
-       <widget class="QLabel" name="ownCertificatePrivateKeyLabel">
-        <property name="text">
-         <string>Key:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="4" column="1" colspan="2">
-       <widget class="QLineEdit" name="ownCertificatePublicKeyEdit">
-        <property name="accessibleName">
-         <string>Certificate</string>
-        </property>
-        <property name="readOnly">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="1" colspan="2">
-       <widget class="QLineEdit" name="ownCertificateSignerEdit">
-        <property name="accessibleName">
-         <string>Signer name field</string>
-        </property>
-       </widget>
-      </item>
-      <item row="5" column="1" colspan="2">
-       <widget class="QLineEdit" name="ownCertificateFingerprintEdit">
-        <property name="accessibleName">
-         <string>Fingerprint</string>
-        </property>
-        <property name="readOnly">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
+     <layout class="QGridLayout" name="gridLayout_2" columnstretch="0,0,0">
+      <property name="horizontalSpacing">
+       <number>10</number>
+      </property>
       <item row="0" column="0" colspan="3">
        <layout class="QHBoxLayout" name="horizontalLayout">
         <item>
@@ -191,6 +129,43 @@
          </widget>
         </item>
        </layout>
+      </item>
+      <item row="3" column="1" colspan="2">
+       <widget class="QLineEdit" name="ownCertificateFingerprintEdit">
+        <property name="accessibleName">
+         <string>Fingerprint</string>
+        </property>
+        <property name="readOnly">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1" colspan="2">
+       <widget class="QLineEdit" name="ownCertificateSignerEdit">
+        <property name="accessibleName">
+         <string>Signer name field</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="ownCertificateSignerLabel">
+        <property name="text">
+         <string>Signer:</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="ownCertificateFingerprintLabel">
+        <property name="text">
+         <string>Fingerprint:</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+        </property>
+       </widget>
       </item>
      </layout>
     </widget>
@@ -310,6 +285,21 @@
    </item>
   </layout>
  </widget>
+ <tabstops>
+  <tabstop>enableImportCheckBox</tabstop>
+  <tabstop>quietSuccessCheckBox</tabstop>
+  <tabstop>enableExportCheckBox</tabstop>
+  <tabstop>generateOwnCerticateButton</tabstop>
+  <tabstop>importOwnCertificateButton</tabstop>
+  <tabstop>exportOwnCertificateButton</tabstop>
+  <tabstop>ownCertificateSignerEdit</tabstop>
+  <tabstop>ownCertificateFingerprintEdit</tabstop>
+  <tabstop>trustImportedCertificateButton</tabstop>
+  <tabstop>askImportedCertificateButton</tabstop>
+  <tabstop>untrustImportedCertificateButton</tabstop>
+  <tabstop>removeImportedCertificateButton</tabstop>
+  <tabstop>importedCertificateTableView</tabstop>
+ </tabstops>
  <resources/>
  <connections/>
 </ui>

@@ -18,6 +18,7 @@
 
 #include "Kdbx3Reader.h"
 
+#include "core/AsyncTask.h"
 #include "core/Endian.h"
 #include "core/Group.h"
 #include "crypto/CryptoHash.h"
@@ -47,26 +48,26 @@ bool Kdbx3Reader::readDatabaseImpl(QIODevice* device,
         return false;
     }
 
-    if (!db->setKey(key, false)) {
-        raiseError(tr("Unable to calculate master key"));
+    bool ok = AsyncTask::runAndWaitForFuture([&] { return db->setKey(key, false); });
+    if (!ok) {
+        raiseError(tr("Unable to calculate database key"));
         return false;
     }
 
     if (!db->challengeMasterSeed(m_masterSeed)) {
-        raiseError(tr("Unable to issue challenge-response."));
+        raiseError(tr("Unable to issue challenge-response: %1").arg(db->keyError()));
         return false;
     }
 
     CryptoHash hash(CryptoHash::Sha256);
     hash.addData(m_masterSeed);
     hash.addData(db->challengeResponseKey());
-    hash.addData(db->transformedMasterKey());
+    hash.addData(db->transformedDatabaseKey());
     QByteArray finalKey = hash.result();
 
-    SymmetricCipher::Algorithm cipher = SymmetricCipher::cipherToAlgorithm(db->cipher());
-    SymmetricCipherStream cipherStream(
-        device, cipher, SymmetricCipher::algorithmMode(cipher), SymmetricCipher::Decrypt);
-    if (!cipherStream.init(finalKey, m_encryptionIV)) {
+    auto mode = SymmetricCipher::cipherUuidToMode(db->cipher());
+    SymmetricCipherStream cipherStream(device);
+    if (!cipherStream.init(mode, SymmetricCipher::Decrypt, finalKey, m_encryptionIV)) {
         raiseError(cipherStream.errorString());
         return false;
     }
@@ -104,8 +105,8 @@ bool Kdbx3Reader::readDatabaseImpl(QIODevice* device,
         xmlDevice = ioCompressor.data();
     }
 
-    KeePass2RandomStream randomStream(KeePass2::ProtectedStreamAlgo::Salsa20);
-    if (!randomStream.init(m_protectedStreamKey)) {
+    KeePass2RandomStream randomStream;
+    if (!randomStream.init(SymmetricCipher::Salsa20, m_protectedStreamKey)) {
         raiseError(randomStream.errorString());
         return false;
     }

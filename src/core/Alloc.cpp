@@ -16,15 +16,17 @@
  */
 
 #include <QtGlobal>
+#include <botan/mem_ops.h>
 #include <cstdint>
 #include <cstdlib>
-#include <sodium.h>
 #if defined(Q_OS_MACOS)
 #include <malloc/malloc.h>
 #elif defined(Q_OS_FREEBSD)
 #include <malloc_np.h>
-#else
+#elif defined(HAVE_MALLOC_H)
 #include <malloc.h>
+#else
+#include <stdlib.h>
 #endif
 
 #if defined(NDEBUG) && !defined(__cpp_sized_deallocation)
@@ -41,7 +43,7 @@ void operator delete(void* ptr, std::size_t size) noexcept
         return;
     }
 
-    sodium_memzero(ptr, size);
+    Botan::secure_scrub_memory(ptr, size);
     std::free(ptr);
 }
 
@@ -64,7 +66,7 @@ void operator delete(void* ptr) noexcept
     ::operator delete(ptr, _msize(ptr));
 #elif defined(Q_OS_MACOS)
     ::operator delete(ptr, malloc_size(ptr));
-#elif defined(Q_OS_UNIX)
+#elif defined(HAVE_MALLOC_USABLE_SIZE)
     ::operator delete(ptr, malloc_usable_size(ptr));
 #else
     // whatever OS this is, give up and simply free stuff
@@ -77,14 +79,17 @@ void operator delete[](void* ptr) noexcept
     ::operator delete(ptr);
 }
 
+// clang-format versions less than 10.0 refuse to put a space before "noexcept"
+// clang-format off
 /**
  * Custom insecure delete operator that does not zero out memory before
  * freeing a buffer. Can be used for better performance.
  */
-void operator delete(void* ptr, bool)noexcept
+void operator delete(void* ptr, bool) noexcept
 {
     std::free(ptr);
 }
+// clang-format on
 
 void operator delete[](void* ptr, bool) noexcept
 {

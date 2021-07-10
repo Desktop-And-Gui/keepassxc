@@ -19,21 +19,17 @@
 #include "PasswordGenerator.h"
 
 #include "crypto/Random.h"
-#include <zxcvbn.h>
 
+const char* PasswordGenerator::DefaultAdditionalChars = "";
 const char* PasswordGenerator::DefaultExcludedChars = "";
 
 PasswordGenerator::PasswordGenerator()
     : m_length(0)
     , m_classes(nullptr)
     , m_flags(nullptr)
+    , m_additional(PasswordGenerator::DefaultAdditionalChars)
     , m_excluded(PasswordGenerator::DefaultExcludedChars)
 {
-}
-
-double PasswordGenerator::estimateEntropy(const QString& password)
-{
-    return ZxcvbnMatch(password.toLatin1(), nullptr, nullptr);
 }
 
 void PasswordGenerator::setLength(int length)
@@ -57,6 +53,11 @@ void PasswordGenerator::setCharClasses(const CharClasses& classes)
 void PasswordGenerator::setFlags(const GeneratorFlags& flags)
 {
     m_flags = flags;
+}
+
+void PasswordGenerator::setAdditionalChars(const QString& chars)
+{
+    m_additional = chars;
 }
 
 void PasswordGenerator::setExcludedChars(const QString& chars)
@@ -113,7 +114,7 @@ QString PasswordGenerator::generatePassword() const
 
 bool PasswordGenerator::isValid() const
 {
-    if (m_classes == 0) {
+    if (m_classes == 0 && m_additional.isEmpty()) {
         return false;
     } else if (m_length == 0) {
         return false;
@@ -149,7 +150,7 @@ QVector<PasswordGroup> PasswordGenerator::passwordGroups() const
 
         for (int i = 65; i <= (65 + 25); i++) {
 
-            if ((m_flags & ExcludeLookAlike) && (i == 73 || i == 79)) { // "I" and "O"
+            if ((m_flags & ExcludeLookAlike) && (i == 66 || i == 71 || i == 73 || i == 79)) { //"B", "G", "I" and "O"
                 continue;
             }
 
@@ -162,7 +163,7 @@ QVector<PasswordGroup> PasswordGenerator::passwordGroups() const
         PasswordGroup group;
 
         for (int i = 48; i < (48 + 10); i++) {
-            if ((m_flags & ExcludeLookAlike) && (i == 48 || i == 49)) { // "0" and "1"
+            if ((m_flags & ExcludeLookAlike) && (i == 48 || i == 49 || i == 54 || i == 56)) { // "0", "1", "6", and "8"
                 continue;
             }
 
@@ -261,6 +262,15 @@ QVector<PasswordGroup> PasswordGenerator::passwordGroups() const
                 continue;
             }
             group.append(i);
+        }
+
+        passwordGroups.append(group);
+    }
+    if (!m_additional.isEmpty()) {
+        PasswordGroup group;
+
+        for (auto ch : m_additional) {
+            group.append(ch);
         }
 
         passwordGroups.append(group);

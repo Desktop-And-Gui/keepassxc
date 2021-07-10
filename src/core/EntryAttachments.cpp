@@ -23,7 +23,7 @@
 #include <QStringList>
 
 EntryAttachments::EntryAttachments(QObject* parent)
-    : QObject(parent)
+    : ModifiableObject(parent)
 {
 }
 
@@ -49,7 +49,7 @@ QByteArray EntryAttachments::value(const QString& key) const
 
 void EntryAttachments::set(const QString& key, const QByteArray& value)
 {
-    bool emitModified = false;
+    bool shouldEmitModified = false;
     bool addAttachment = !m_attachments.contains(key);
 
     if (addAttachment) {
@@ -58,7 +58,7 @@ void EntryAttachments::set(const QString& key, const QByteArray& value)
 
     if (addAttachment || m_attachments.value(key) != value) {
         m_attachments.insert(key, value);
-        emitModified = true;
+        shouldEmitModified = true;
     }
 
     if (addAttachment) {
@@ -67,8 +67,8 @@ void EntryAttachments::set(const QString& key, const QByteArray& value)
         emit keyModified(key);
     }
 
-    if (emitModified) {
-        emit entryAttachmentsModified();
+    if (shouldEmitModified) {
+        emitModified();
     }
 }
 
@@ -84,7 +84,7 @@ void EntryAttachments::remove(const QString& key)
     m_attachments.remove(key);
 
     emit removed(key);
-    emit entryAttachmentsModified();
+    emitModified();
 }
 
 void EntryAttachments::remove(const QStringList& keys)
@@ -108,8 +108,15 @@ void EntryAttachments::remove(const QStringList& keys)
     }
 
     if (isModified) {
-        emit entryAttachmentsModified();
+        emitModified();
     }
+}
+
+void EntryAttachments::rename(const QString& key, const QString& newKey)
+{
+    const QByteArray val = value(key);
+    remove(key);
+    set(newKey, val);
 }
 
 bool EntryAttachments::isEmpty() const
@@ -128,7 +135,7 @@ void EntryAttachments::clear()
     m_attachments.clear();
 
     emit reset();
-    emit entryAttachmentsModified();
+    emitModified();
 }
 
 void EntryAttachments::copyDataFrom(const EntryAttachments* other)
@@ -139,7 +146,7 @@ void EntryAttachments::copyDataFrom(const EntryAttachments* other)
         m_attachments = other->m_attachments;
 
         emit reset();
-        emit entryAttachmentsModified();
+        emitModified();
     }
 }
 

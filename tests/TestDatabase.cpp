@@ -23,6 +23,7 @@
 
 #include "config-keepassx-tests.h"
 #include "core/Metadata.h"
+#include "core/Tools.h"
 #include "crypto/Crypto.h"
 #include "format/KeePass2Writer.h"
 #include "keys/PasswordKey.h"
@@ -110,13 +111,16 @@ void TestDatabase::testSignals()
     QVERIFY(ok);
     QCOMPARE(spyFilePathChanged.count(), 1);
 
-    QSignalSpy spyModified(db.data(), SIGNAL(databaseModified()));
+    QSignalSpy spyModified(db.data(), SIGNAL(modified()));
     db->metadata()->setName("test1");
     QTRY_COMPARE(spyModified.count(), 1);
 
     QSignalSpy spySaved(db.data(), SIGNAL(databaseSaved()));
     QVERIFY(db->save(&error));
     QCOMPARE(spySaved.count(), 1);
+
+    // Short delay to allow file system settling to reduce test failures
+    Tools::wait(100);
 
     QSignalSpy spyFileChanged(db.data(), SIGNAL(databaseFileChanged()));
     QVERIFY(tempFile.copyFromFile(dbFileName));
@@ -143,7 +147,7 @@ void TestDatabase::testEmptyRecycleBinOnDisabled()
     // Prevents assertion failures on CI systems when the data dir is not writable
     db->setReadOnly(false);
 
-    QSignalSpy spyModified(db.data(), SIGNAL(databaseModified()));
+    QSignalSpy spyModified(db.data(), SIGNAL(modified()));
 
     db->emptyRecycleBin();
     // The database must be unmodified in this test after emptying the recycle bin.
@@ -159,7 +163,7 @@ void TestDatabase::testEmptyRecycleBinOnNotCreated()
     QVERIFY(db->open(filename, key, nullptr, false));
     db->setReadOnly(false);
 
-    QSignalSpy spyModified(db.data(), SIGNAL(databaseModified()));
+    QSignalSpy spyModified(db.data(), SIGNAL(modified()));
 
     db->emptyRecycleBin();
     // The database must be unmodified in this test after emptying the recycle bin.
@@ -175,7 +179,7 @@ void TestDatabase::testEmptyRecycleBinOnEmpty()
     QVERIFY(db->open(filename, key, nullptr, false));
     db->setReadOnly(false);
 
-    QSignalSpy spyModified(db.data(), SIGNAL(databaseModified()));
+    QSignalSpy spyModified(db.data(), SIGNAL(modified()));
 
     db->emptyRecycleBin();
     // The database must be unmodified in this test after emptying the recycle bin.

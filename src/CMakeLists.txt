@@ -19,6 +19,13 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 find_library(ZXCVBN_LIBRARIES zxcvbn)
 if(NOT ZXCVBN_LIBRARIES)
     add_library(zxcvbn STATIC zxcvbn/zxcvbn.c)
+    # Disable error-level shadow issues
+    if(CC_HAS_Wshadow_compatible_local)
+        set_property(SOURCE zxcvbn/zxcvbn.c APPEND PROPERTY COMPILE_OPTIONS "-Wno-shadow-compatible-local")
+    endif()
+    if(CC_HAS_Wshadow_local)
+        set_property(SOURCE zxcvbn/zxcvbn.c APPEND PROPERTY COMPILE_OPTIONS "-Wno-shadow-local")
+    endif()
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/zxcvbn)
     set(ZXCVBN_LIBRARIES zxcvbn)
 endif(NOT ZXCVBN_LIBRARIES)
@@ -26,7 +33,6 @@ endif(NOT ZXCVBN_LIBRARIES)
 set(keepassx_SOURCES
         core/Alloc.cpp
         core/AutoTypeAssociations.cpp
-        core/AutoTypeMatch.cpp
         core/Base32.cpp
         core/Bootstrap.cpp
         core/Clock.cpp
@@ -40,18 +46,18 @@ set(keepassx_SOURCES
         core/EntryAttachments.cpp
         core/EntryAttributes.cpp
         core/EntrySearcher.cpp
-        core/FilePath.cpp
         core/FileWatcher.cpp
         core/Group.cpp
         core/HibpOffline.cpp
         core/InactivityTimer.cpp
         core/Merger.cpp
         core/Metadata.cpp
+        core/ModifiableObject.cpp
         core/PasswordGenerator.cpp
+        core/PasswordHealth.cpp
         core/PassphraseGenerator.cpp
+        core/Resources.cpp
         core/SignalMultiplexer.cpp
-        core/ScreenLockListener.cpp
-        core/ScreenLockListenerPrivate.cpp
         core/TimeDelta.cpp
         core/TimeInfo.cpp
         core/Tools.cpp
@@ -62,7 +68,6 @@ set(keepassx_SOURCES
         crypto/CryptoHash.cpp
         crypto/Random.cpp
         crypto/SymmetricCipher.cpp
-        crypto/SymmetricCipherGcrypt.cpp
         crypto/kdf/Kdf.cpp
         crypto/kdf/AesKdf.cpp
         crypto/kdf/Argon2Kdf.cpp
@@ -86,6 +91,12 @@ set(keepassx_SOURCES
         format/OpVaultReaderAttachments.cpp
         format/OpVaultReaderBandEntry.cpp
         format/OpVaultReaderSections.cpp
+        gui/styles/styles.qrc
+        gui/styles/StateColorPalette.cpp
+        gui/styles/base/phantomcolor.cpp
+        gui/styles/base/BaseStyle.cpp
+        gui/styles/dark/DarkStyle.cpp
+        gui/styles/light/LightStyle.cpp
         gui/AboutDialog.cpp
         gui/Application.cpp
         gui/CategoryListWidget.cpp
@@ -103,10 +114,10 @@ set(keepassx_SOURCES
         gui/EditWidgetProperties.cpp
         gui/FileDialog.cpp
         gui/Font.cpp
+        gui/GuiTools.cpp
         gui/IconModels.cpp
         gui/KeePass1OpenWidget.cpp
         gui/KMessageWidget.cpp
-        gui/LineEdit.cpp
         gui/MainWindow.cpp
         gui/MessageBox.cpp
         gui/MessageWidget.cpp
@@ -114,6 +125,7 @@ set(keepassx_SOURCES
         gui/PasswordEdit.cpp
         gui/PasswordGeneratorWidget.cpp
         gui/ApplicationSettingsWidget.cpp
+        gui/Icons.cpp
         gui/SearchWidget.cpp
         gui/SortFilterHideProxyModel.cpp
         gui/SquareSvgWidget.cpp
@@ -121,13 +133,12 @@ set(keepassx_SOURCES
         gui/TotpDialog.cpp
         gui/TotpExportSettingsDialog.cpp
         gui/DatabaseOpenDialog.cpp
+        gui/URLEdit.cpp
         gui/WelcomeWidget.cpp
         gui/csvImport/CsvImportWidget.cpp
         gui/csvImport/CsvImportWizard.cpp
         gui/csvImport/CsvParserModel.cpp
         gui/entry/AutoTypeAssociationsModel.cpp
-        gui/entry/AutoTypeMatchModel.cpp
-        gui/entry/AutoTypeMatchView.cpp
         gui/entry/EditEntryWidget.cpp
         gui/entry/EntryAttachmentsModel.cpp
         gui/entry/EntryAttachmentsWidget.cpp
@@ -138,31 +149,41 @@ set(keepassx_SOURCES
         gui/group/EditGroupWidget.cpp
         gui/group/GroupModel.cpp
         gui/group/GroupView.cpp
-        gui/masterkey/KeyComponentWidget.cpp
-        gui/masterkey/PasswordEditWidget.cpp
-        gui/masterkey/YubiKeyEditWidget.cpp
-        gui/masterkey/KeyFileEditWidget.cpp
+        gui/databasekey/KeyComponentWidget.cpp
+        gui/databasekey/PasswordEditWidget.cpp
+        gui/databasekey/YubiKeyEditWidget.cpp
+        gui/databasekey/KeyFileEditWidget.cpp
         gui/dbsettings/DatabaseSettingsWidget.cpp
         gui/dbsettings/DatabaseSettingsDialog.cpp
         gui/dbsettings/DatabaseSettingsWidgetGeneral.cpp
+        gui/dbsettings/DatabaseSettingsWidgetMaintenance.cpp
         gui/dbsettings/DatabaseSettingsWidgetMetaDataSimple.cpp
         gui/dbsettings/DatabaseSettingsWidgetEncryption.cpp
-        gui/dbsettings/DatabaseSettingsWidgetMasterKey.cpp
-        gui/dbsettings/DatabaseSettingsWidgetStatistics.cpp
-        gui/dbsettings/DatabaseSettingsPageStatistics.cpp
+        gui/dbsettings/DatabaseSettingsWidgetDatabaseKey.cpp
+        gui/reports/ReportsWidget.cpp
+        gui/reports/ReportsDialog.cpp
+        gui/reports/ReportsWidgetHealthcheck.cpp
+        gui/reports/ReportsPageHealthcheck.cpp
+        gui/reports/ReportsWidgetHibp.cpp
+        gui/reports/ReportsPageHibp.cpp
+        gui/reports/ReportsWidgetStatistics.cpp
+        gui/reports/ReportsPageStatistics.cpp
+        gui/osutils/OSUtilsBase.cpp
+        gui/osutils/ScreenLockListener.cpp
+        gui/osutils/ScreenLockListenerPrivate.cpp
         gui/settings/SettingsWidget.cpp
         gui/widgets/ElidedLabel.cpp
+        gui/widgets/KPToolBar.cpp
         gui/widgets/PopupHelpWidget.cpp
         gui/wizard/NewDatabaseWizard.cpp
         gui/wizard/NewDatabaseWizardPage.cpp
         gui/wizard/NewDatabaseWizardPageMetaData.cpp
         gui/wizard/NewDatabaseWizardPageEncryption.cpp
-        gui/wizard/NewDatabaseWizardPageMasterKey.cpp
+        gui/wizard/NewDatabaseWizardPageDatabaseKey.cpp
         keys/CompositeKey.cpp
         keys/FileKey.cpp
         keys/PasswordKey.cpp
-        keys/YkChallengeResponseKey.cpp
-        keys/YkChallengeResponseKeyCLI.cpp
+        keys/ChallengeResponseKey.cpp
         streams/HashedBlockStream.cpp
         streams/HmacBlockStream.cpp
         streams/LayeredStream.cpp
@@ -173,28 +194,30 @@ set(keepassx_SOURCES
 if(APPLE)
     set(keepassx_SOURCES
             ${keepassx_SOURCES}
-            core/ScreenLockListenerMac.cpp
             core/MacPasteboard.cpp
-            gui/macutils/MacUtils.cpp
-            gui/macutils/AppKitImpl.mm
-            gui/macutils/AppKit.h)
+            gui/osutils/macutils/MacUtils.cpp
+            gui/osutils/macutils/ScreenLockListenerMac.cpp
+            gui/osutils/macutils/AppKitImpl.mm
+            gui/osutils/macutils/AppKit.h)
 endif()
 if(UNIX AND NOT APPLE)
     set(keepassx_SOURCES
             ${keepassx_SOURCES}
-            core/ScreenLockListenerDBus.cpp
-            gui/MainWindowAdaptor.cpp)
+            gui/MainWindowAdaptor.cpp
+            gui/osutils/nixutils/ScreenLockListenerDBus.cpp
+            gui/osutils/nixutils/NixUtils.cpp
+            gui/osutils/nixutils/X11Funcs.cpp)
 endif()
 if(MINGW)
     set(keepassx_SOURCES
             ${keepassx_SOURCES}
-            core/ScreenLockListenerWin.cpp)
+            gui/osutils/winutils/ScreenLockListenerWin.cpp
+            gui/osutils/winutils/WinUtils.cpp)
 endif()
-if(MINGW OR (UNIX AND NOT APPLE))
-    set(keepassx_SOURCES
-            ${keepassx_SOURCES}
-            core/OSEventFilter.cpp)
-endif()
+
+set(keepassx_SOURCES ${keepassx_SOURCES}
+        ../share/icons/icons.qrc
+        ../share/wizard/wizard.qrc)
 
 set(keepassx_SOURCES_MAINEXE main.cpp)
 
@@ -212,7 +235,6 @@ if(APPLE)
     add_feature_info(TouchID WITH_XC_TOUCHID "TouchID integration")
 endif()
 
-set(BROWSER_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/browser)
 add_subdirectory(browser)
 add_subdirectory(proxy)
 if(WITH_XC_BROWSER)
@@ -225,11 +247,6 @@ add_subdirectory(autotype)
 add_subdirectory(cli)
 add_subdirectory(qrcode)
 set(qrcode_LIB qrcode)
-
-add_subdirectory(crypto/ssh)
-if(WITH_XC_CRYPTO_SSH)
-    set(crypto_ssh_LIB crypto_ssh)
-endif()
 
 add_subdirectory(keeshare)
 if(WITH_XC_KEESHARE)
@@ -250,11 +267,11 @@ set(autotype_SOURCES
         core/Tools.cpp
         autotype/AutoType.cpp
         autotype/AutoTypeAction.cpp
-        autotype/AutoTypeFilterLineEdit.cpp
+        autotype/AutoTypeMatchModel.cpp
+        autotype/AutoTypeMatchView.cpp
         autotype/AutoTypeSelectDialog.cpp
-        autotype/AutoTypeSelectView.cpp
+        autotype/PickcharsDialog.cpp
         autotype/ShortcutWidget.cpp
-        autotype/WildcardMatcher.cpp
         autotype/WindowSelectComboBox.cpp)
 
 if(MINGW)
@@ -269,9 +286,10 @@ endif()
 
 if(WITH_XC_NETWORKING)
     list(APPEND keepassx_SOURCES
-            core/IconDownloader.cpp
+            core/HibpDownloader.cpp
             core/NetworkManager.cpp
             gui/UpdateCheckDialog.cpp
+            gui/IconDownloader.cpp
             gui/IconDownloaderDialog.cpp
             updatecheck/UpdateChecker.cpp)
 endif()
@@ -300,13 +318,11 @@ target_link_libraries(keepassx_core
         Qt5::Concurrent
         Qt5::Network
         Qt5::Widgets
-        ${sodium_LIBRARY_RELEASE}
+        ${BOTAN2_LIBRARIES}
         ${YUBIKEY_LIBRARIES}
         ${ZXCVBN_LIBRARIES}
-        ${ARGON2_LIBRARIES}
-        ${GCRYPT_LIBRARIES}
-        ${GPGERROR_LIBRARIES}
-        ${ZLIB_LIBRARIES})
+        ${ZLIB_LIBRARIES}
+	)
 
 if(WITH_XC_SSHAGENT)
   target_link_libraries(keepassx_core sshagent)
@@ -316,7 +332,7 @@ if(WITH_XC_KEESHARE)
 endif()
 
 if(APPLE)
-    target_link_libraries(keepassx_core "-framework Foundation -framework AppKit")
+    target_link_libraries(keepassx_core "-framework Foundation -framework AppKit -framework Carbon")
     if(Qt5MacExtras_FOUND)
         target_link_libraries(keepassx_core Qt5::MacExtras)
     endif()
@@ -329,7 +345,8 @@ if(HAIKU)
     target_link_libraries(keepassx_core network)
 endif()
 if(UNIX AND NOT APPLE)
-    target_link_libraries(keepassx_core Qt5::DBus)
+    target_link_libraries(keepassx_core Qt5::DBus Qt5::X11Extras X11)
+    include_directories(${Qt5Gui_PRIVATE_INCLUDE_DIRS})
 endif()
 if(MINGW)
     target_link_libraries(keepassx_core Wtsapi32.lib Ws2_32.lib)
@@ -353,6 +370,7 @@ target_link_libraries(${PROGNAME} keepassx_core)
 set_target_properties(${PROGNAME} PROPERTIES ENABLE_EXPORTS ON)
 
 if(APPLE AND WITH_APP_BUNDLE)
+    install(FILES ${CMAKE_SOURCE_DIR}/share/macosx/embedded.provisionprofile DESTINATION ${BUNDLE_INSTALL_DIR})
     configure_file(${CMAKE_SOURCE_DIR}/share/macosx/Info.plist.cmake ${CMAKE_CURRENT_BINARY_DIR}/Info.plist)
     set_target_properties(${PROGNAME} PROPERTIES
             MACOSX_BUNDLE ON
@@ -380,7 +398,7 @@ if(APPLE AND WITH_APP_BUNDLE)
 
     add_custom_command(TARGET ${PROGNAME}
             POST_BUILD
-            COMMAND ${MACDEPLOYQT_EXE} ${PROGNAME}.app
+            COMMAND ${MACDEPLOYQT_EXE} ${PROGNAME}.app 2> /dev/null
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/src
             COMMENT "Deploying app bundle")
 endif()
@@ -388,10 +406,6 @@ endif()
 install(TARGETS ${PROGNAME}
         BUNDLE DESTINATION . COMPONENT Runtime
         RUNTIME DESTINATION ${BIN_INSTALL_DIR} COMPONENT Runtime)
-
-if(APPLE OR UNIX)
-    install(FILES ../share/docs/man/keepassxc.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1/)
-endif()
 
 if(MINGW)
     if(${CMAKE_SIZEOF_VOID_P} EQUAL "8")
@@ -437,9 +451,14 @@ if(MINGW)
     set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/share/windows/keepassxc.ico")
     set(CPACK_WIX_UI_BANNER "${CMAKE_SOURCE_DIR}/share/windows/wix-banner.bmp")
     set(CPACK_WIX_UI_DIALOG "${CMAKE_SOURCE_DIR}/share/windows/wix-dialog.bmp")
+    set(CPACK_WIX_UI_REF "KPXC_InstallDir")
     set(CPACK_WIX_TEMPLATE "${CMAKE_SOURCE_DIR}/share/windows/wix-template.xml")
     set(CPACK_WIX_PATCH_FILE "${CMAKE_SOURCE_DIR}/share/windows/wix-patch.xml")
-    set(CPACK_WIX_PROPERTY_ARPURLINFOABOUT "https://keepassxc.org")
+    set(CPACK_WIX_EXTRA_SOURCES
+            "${CMAKE_SOURCE_DIR}/share/windows/KPXC_InstallDir.wxs"
+            "${CMAKE_SOURCE_DIR}/share/windows/KPXC_InstallDirDlg.wxs"
+            "${CMAKE_SOURCE_DIR}/share/windows/KPXC_ExitDlg.wxs")
+    set(CPACK_WIX_PROPERTY_ARPURLINFOABOUT  "https://keepassxc.org")
     set(CPACK_WIX_EXTENSIONS "WixUtilExtension.dll")
     include(CPack)
 
@@ -451,9 +470,11 @@ if(MINGW)
             COMPONENT Runtime)
 
     # Use windeployqt.exe to setup Qt dependencies
-    set(WINDEPLOYQT_MODE "--release")
-    if(CMAKE_BUILD_TYPE_LOWER STREQUAL "debug")
-        set(WINDEPLOYQT_MODE "--debug")
+    if(Qt5Core_VERSION VERSION_LESS "5.14.1")
+        set(WINDEPLOYQT_MODE "--release")
+        if(CMAKE_BUILD_TYPE_LOWER STREQUAL "debug")
+            set(WINDEPLOYQT_MODE "--debug")
+        endif()
     endif()
 
     install(CODE "execute_process(COMMAND ${WINDEPLOYQT_EXE} ${PROGNAME}.exe ${WINDEPLOYQT_MODE} WORKING_DIRECTORY \${CMAKE_INSTALL_PREFIX} OUTPUT_QUIET)"
@@ -463,8 +484,16 @@ if(MINGW)
     install(FILES ${Qt5_PREFIX}/ssl/certs/ca-bundle.crt DESTINATION "ssl/certs")
     # install OpenSSL library
     if(WITH_XC_NETWORKING)
-        find_library(OPENSSL_DLL NAMES libssl-1_1.dll libssl-1_1-x64.dll PATH_SUFFIXES bin)
-        find_library(CRYPTO_DLL NAMES libcrypto-1_1.dll libcrypto-1_1-x64.dll PATH_SUFFIXES bin)
+        find_file(OPENSSL_DLL NAMES libssl-1_1.dll libssl-1_1-x64.dll)
+        if (NOT OPENSSL_DLL)
+            message(FATAL_ERROR "Cannot find libssl dll, ensure openssl is properly installed.")
+        endif()
+
+        find_file(CRYPTO_DLL NAMES libcrypto-1_1.dll libcrypto-1_1-x64.dll)
+        if (NOT CRYPTO_DLL)
+            message(FATAL_ERROR "Cannot find libcrypto dll, ensure openssl is properly installed.")
+        endif()
+
         install(FILES ${OPENSSL_DLL} ${CRYPTO_DLL} DESTINATION ".")
     endif()
 endif()

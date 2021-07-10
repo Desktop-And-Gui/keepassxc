@@ -24,6 +24,8 @@
 #include <QModelIndex>
 #include <QPointer>
 #include <QScopedPointer>
+#include <QScrollArea>
+#include <QTimer>
 
 #include "config-keepassx.h"
 #include "gui/EditWidget.h"
@@ -83,8 +85,6 @@ private slots:
     void acceptEntry();
     bool commitEntry();
     void cancel();
-    void togglePasswordGeneratorButton(bool checked);
-    void setGeneratedPassword(const QString& password);
 #ifdef WITH_XC_NETWORKING
     void updateFaviconButtonEnable(const QString& url);
 #endif
@@ -93,7 +93,7 @@ private slots:
     void removeCurrentAttribute();
     void updateCurrentAttribute();
     void protectCurrentAttribute(bool state);
-    void revealCurrentAttribute();
+    void toggleCurrentAttributeVisibility();
     void updateAutoTypeEnabled();
     void openAutotypeHelp();
     void insertAutoTypeAssoc();
@@ -112,6 +112,8 @@ private slots:
     void toggleHideNotes(bool visible);
     void pickColor();
 #ifdef WITH_XC_SSHAGENT
+    void toKeeAgentSettings(KeeAgentSettings& settings) const;
+    void setSSHAgentSettings();
     void updateSSHAgent();
     void updateSSHAgentAttachment();
     void updateSSHAgentAttachments();
@@ -153,7 +155,6 @@ private:
     void updateEntryData(Entry* entry) const;
 #ifdef WITH_XC_SSHAGENT
     bool getOpenSSHKey(OpenSSHKey& key, bool decrypt = false);
-    void saveSSHAgentConfig();
 #endif
 
     void displayAttribute(QModelIndex index, bool showProtected);
@@ -164,7 +165,6 @@ private:
     bool m_create;
     bool m_history;
 #ifdef WITH_XC_SSHAGENT
-    bool m_sshAgentEnabled;
     KeeAgentSettings m_sshAgentSettings;
 #endif
     const QScopedPointer<Ui::EditEntryWidgetMain> m_mainUi;
@@ -175,7 +175,7 @@ private:
     const QScopedPointer<Ui::EditEntryWidgetBrowser> m_browserUi;
     const QScopedPointer<CustomData> m_customData;
 
-    QWidget* const m_mainWidget;
+    QScrollArea* const m_mainWidget;
     QWidget* const m_advancedWidget;
     EditWidgetIcons* const m_iconsWidget;
     QWidget* const m_autoTypeWidget;
@@ -200,6 +200,7 @@ private:
     QButtonGroup* const m_autoTypeWindowSequenceGroup;
     QCompleter* const m_usernameCompleter;
     QStringListModel* const m_usernameCompleterModel;
+    QTimer m_entryModifiedTimer;
 
     Q_DISABLE_COPY(EditEntryWidget)
 };

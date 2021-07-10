@@ -22,11 +22,13 @@
 #include "core/Group.h"
 #include "core/Metadata.h"
 #include "gui/FileDialog.h"
+#include "gui/MessageBox.h"
 #include "keeshare/KeeShare.h"
 #include "keeshare/KeeShareSettings.h"
 
-#include <QMessageBox>
 #include <QStandardItemModel>
+#include <QStandardPaths>
+#include <QTextStream>
 
 SettingsWidgetKeeShare::SettingsWidgetKeeShare(QWidget* parent)
     : QWidget(parent)
@@ -72,27 +74,32 @@ void SettingsWidgetKeeShare::updateForeignCertificates()
 {
     auto headers = QStringList() << tr("Path") << tr("Status");
 #if defined(WITH_XC_KEESHARE_SECURE)
-    headers << tr("Signer") << tr("Fingerprint") << tr("Certificate");
+    headers << tr("Signer") << tr("Fingerprint");
 #endif
 
     m_importedCertificateModel.reset(new QStandardItemModel());
     m_importedCertificateModel->setHorizontalHeaderLabels(headers);
 
     for (const auto& scopedCertificate : m_foreign.certificates) {
-        const auto items = QList<QStandardItem*>()
-                           << new QStandardItem(scopedCertificate.path)
-                           << new QStandardItem(scopedCertificate.trust == KeeShareSettings::Trust::Ask
-                                                    ? tr("Ask")
-                                                    : (scopedCertificate.trust == KeeShareSettings::Trust::Trusted
-                                                           ? tr("Trusted")
-                                                           : tr("Untrusted")))
+        QList<QStandardItem*> items;
+        items << new QStandardItem(scopedCertificate.path);
+
+        switch (scopedCertificate.trust) {
+        case KeeShareSettings::Trust::Ask:
+            items << new QStandardItem(tr("Ask"));
+            break;
+        case KeeShareSettings::Trust::Trusted:
+            items << new QStandardItem(tr("Trusted"));
+            break;
+        case KeeShareSettings::Trust::Untrusted:
+            items << new QStandardItem(tr("Untrusted"));
+            break;
+        }
+
 #if defined(WITH_XC_KEESHARE_SECURE)
-                           << new QStandardItem(scopedCertificate.isKnown() ? scopedCertificate.certificate.signer
-                                                                            : tr("Unknown"))
-                           << new QStandardItem(scopedCertificate.certificate.fingerprint())
-                           << new QStandardItem(scopedCertificate.certificate.publicKey())
+        items << new QStandardItem(scopedCertificate.isKnown() ? scopedCertificate.certificate.signer : tr("Unknown"));
+        items << new QStandardItem(scopedCertificate.certificate.fingerprint());
 #endif
-            ;
         m_importedCertificateModel->appendRow(items);
     }
 
@@ -103,8 +110,6 @@ void SettingsWidgetKeeShare::updateForeignCertificates()
 void SettingsWidgetKeeShare::updateOwnCertificate()
 {
     m_ui->ownCertificateSignerEdit->setText(m_own.certificate.signer);
-    m_ui->ownCertificatePublicKeyEdit->setText(m_own.certificate.publicKey());
-    m_ui->ownCertificatePrivateKeyEdit->setText(m_own.key.privateKey());
     m_ui->ownCertificateFingerprintEdit->setText(m_own.certificate.fingerprint());
 }
 
@@ -120,7 +125,7 @@ void SettingsWidgetKeeShare::saveSettings()
     KeeShare::setForeign(m_foreign);
     KeeShare::setActive(active);
 
-    config()->set("KeeShare/QuietSuccess", m_ui->quietSuccessCheckBox->isChecked());
+    config()->set(Config::KeeShare_QuietSuccess, m_ui->quietSuccessCheckBox->isChecked());
 }
 
 void SettingsWidgetKeeShare::setVerificationExporter(const QString& signer)
@@ -133,14 +138,12 @@ void SettingsWidgetKeeShare::generateCertificate()
 {
     m_own = KeeShareSettings::Own::generate();
     m_ui->ownCertificateSignerEdit->setText(m_own.certificate.signer);
-    m_ui->ownCertificatePublicKeyEdit->setText(m_own.certificate.publicKey());
-    m_ui->ownCertificatePrivateKeyEdit->setText(m_own.key.privateKey());
     m_ui->ownCertificateFingerprintEdit->setText(m_own.certificate.fingerprint());
 }
 
 void SettingsWidgetKeeShare::importCertificate()
 {
-    QString defaultDirPath = config()->get("KeeShare/LastKeyDir").toString();
+    QString defaultDirPath = config()->get(Config::KeeShare_LastKeyDir).toString();
     const bool dirExists = !defaultDirPath.isEmpty() && QDir(defaultDirPath).exists();
     if (!dirExists) {
         defaultDirPath = QStandardPaths::standardLocations(QStandardPaths::DocumentsLocation).first();
@@ -157,7 +160,7 @@ void SettingsWidgetKeeShare::importCertificate()
     QTextStream stream(&file);
     m_own = KeeShareSettings::Own::deserialize(stream.readAll());
     file.close();
-    config()->set("KeeShare/LastKeyDir", QFileInfo(filename).absolutePath());
+    config()->set(Config::KeeShare_LastKeyDir, QFileInfo(filename).absolutePath());
 
     updateOwnCertificate();
 }
@@ -165,20 +168,18 @@ void SettingsWidgetKeeShare::importCertificate()
 void SettingsWidgetKeeShare::exportCertificate()
 {
     if (KeeShare::own() != m_own) {
-        QMessageBox warning;
-        warning.setIcon(QMessageBox::Warning);
-        warning.setWindowTitle(tr("Exporting changed certificate"));
-        warning.setText(tr("The exported certificate is not the same as the one in use. Do you want to export the "
-                           "current certificate?"));
-        auto yes = warning.addButton(QMessageBox::StandardButton::Yes);
-        auto no = warning.addButton(QMessageBox::StandardButton::No);
-        warning.setDefaultButton(no);
-        warning.exec();
-        if (warning.clickedButton() != yes) {
+        auto ans = MessageBox::warning(
+            this,
+            tr("Exporting changed certificate"),
+            tr("The exported certificate is not the same as the one in use. Do you want to export the "
+               "current certificate?"),
+            MessageBox::Yes | MessageBox::No,
+            MessageBox::No);
+        if (ans != MessageBox::Yes) {
             return;
         }
     }
-    QString defaultDirPath = config()->get("KeeShare/LastKeyDir").toString();
+    QString defaultDirPath = config()->get(Config::KeeShare_LastKeyDir).toString();
     const bool dirExists = !defaultDirPath.isEmpty() && QDir(defaultDirPath).exists();
     if (!dirExists) {
         defaultDirPath = QStandardPaths::standardLocations(QStandardPaths::DocumentsLocation).first();
@@ -186,8 +187,7 @@ void SettingsWidgetKeeShare::exportCertificate()
     const auto filetype = tr("key.share", "Filetype for KeeShare key");
     const auto filters = QString("%1 (*." + filetype + ");;%2 (*)").arg(tr("KeeShare key file"), tr("All files"));
     QString filename = QString("%1.%2").arg(m_own.certificate.signer).arg(filetype);
-    filename = fileDialog()->getSaveFileName(
-        this, tr("Select path"), defaultDirPath, filters, nullptr, QFileDialog::Options(0));
+    filename = fileDialog()->getSaveFileName(this, tr("Select path"), defaultDirPath, filters);
     if (filename.isEmpty()) {
         return;
     }
@@ -197,7 +197,7 @@ void SettingsWidgetKeeShare::exportCertificate()
     stream << KeeShareSettings::Own::serialize(m_own);
     stream.flush();
     file.close();
-    config()->set("KeeShare/LastKeyDir", QFileInfo(filename).absolutePath());
+    config()->set(Config::KeeShare_LastKeyDir, QFileInfo(filename).absolutePath());
 }
 
 void SettingsWidgetKeeShare::trustSelectedCertificates()

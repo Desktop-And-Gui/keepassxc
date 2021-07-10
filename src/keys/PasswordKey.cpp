@@ -19,9 +19,9 @@
 #include "core/Tools.h"
 
 #include "crypto/CryptoHash.h"
+
 #include <algorithm>
 #include <cstring>
-#include <gcrypt.h>
 
 QUuid PasswordKey::UUID("77e90411-303a-43f2-b773-853b05635ead");
 
@@ -29,38 +29,40 @@ constexpr int PasswordKey::SHA256_SIZE;
 
 PasswordKey::PasswordKey()
     : Key(UUID)
-    , m_key(static_cast<char*>(gcry_malloc_secure(SHA256_SIZE)))
+    , m_key(SHA256_SIZE)
 {
 }
 
 PasswordKey::PasswordKey(const QString& password)
     : Key(UUID)
-    , m_key(static_cast<char*>(gcry_malloc_secure(SHA256_SIZE)))
+    , m_key(SHA256_SIZE)
 {
     setPassword(password);
 }
 
-PasswordKey::~PasswordKey()
+QByteArray PasswordKey::rawKey() const
 {
-    if (m_key) {
-        gcry_free(m_key);
-        m_key = nullptr;
+    if (!m_isInitialized) {
+        return {};
     }
+    return QByteArray(m_key.data(), m_key.size());
+}
+
+void PasswordKey::setPassword(const QString& password)
+{
+    setHash(CryptoHash::hash(password.toUtf8(), CryptoHash::Sha256));
+}
+
+void PasswordKey::setHash(const QByteArray& hash)
+{
+    Q_ASSERT(hash.size() == SHA256_SIZE);
+    std::memcpy(m_key.data(), hash.data(), std::min(SHA256_SIZE, hash.size()));
+    m_isInitialized = true;
 }
 
 QSharedPointer<PasswordKey> PasswordKey::fromRawKey(const QByteArray& rawKey)
 {
     auto result = QSharedPointer<PasswordKey>::create();
-    std::memcpy(result->m_key, rawKey.data(), std::min(SHA256_SIZE, rawKey.size()));
+    result->setHash(rawKey);
     return result;
-}
-
-QByteArray PasswordKey::rawKey() const
-{
-    return QByteArray::fromRawData(m_key, SHA256_SIZE);
-}
-
-void PasswordKey::setPassword(const QString& password)
-{
-    std::memcpy(m_key, CryptoHash::hash(password.toUtf8(), CryptoHash::Sha256).data(), SHA256_SIZE);
 }

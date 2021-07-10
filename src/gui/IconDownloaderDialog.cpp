@@ -23,12 +23,12 @@
 #include "core/Entry.h"
 #include "core/Global.h"
 #include "core/Group.h"
-#include "core/IconDownloader.h"
 #include "core/Metadata.h"
 #include "core/Tools.h"
+#include "gui/IconDownloader.h"
 #include "gui/IconModels.h"
 #ifdef Q_OS_MACOS
-#include "gui/macutils/MacUtils.h"
+#include "gui/osutils/macutils/MacUtils.h"
 #endif
 
 #include <QMutexLocker>
@@ -80,13 +80,13 @@ void IconDownloaderDialog::downloadFavicons(const QSharedPointer<Database>& data
         Tools::wait(100);
 #endif
         showFallbackMessage(false);
-        m_ui->progressLabel->setText(tr("Please wait, processing entry list..."));
+        m_ui->progressLabel->setText(tr("Please wait, processing entry list…"));
         open();
         QApplication::processEvents();
 
         for (const auto& url : m_urlToEntries.uniqueKeys()) {
             m_dataModel->appendRow(QList<QStandardItem*>()
-                                   << new QStandardItem(url) << new QStandardItem(tr("Downloading...")));
+                                   << new QStandardItem(url) << new QStandardItem(tr("Downloading…")));
             m_activeDownloaders.append(createDownloader(url));
         }
 
@@ -159,7 +159,7 @@ void IconDownloaderDialog::downloadFinished(const QString& url, const QImage& ic
 void IconDownloaderDialog::showFallbackMessage(bool state)
 {
     // Show fallback message if the option is not active
-    bool show = state && !config()->get("security/IconDownloadFallback").toBool();
+    bool show = state && !config()->get(Config::Security_IconDownloadFallback).toBool();
     m_ui->fallbackLabel->setVisible(show);
 }
 
@@ -170,7 +170,7 @@ void IconDownloaderDialog::updateProgressBar()
     m_ui->progressBar->setValue(value);
     m_ui->progressBar->setMaximum(total);
     m_ui->progressLabel->setText(
-        tr("Downloading favicons (%1/%2)...").arg(QString::number(value), QString::number(total)));
+        tr("Downloading favicons (%1/%2)…").arg(QString::number(value), QString::number(total)));
 }
 
 void IconDownloaderDialog::updateCancelButton()

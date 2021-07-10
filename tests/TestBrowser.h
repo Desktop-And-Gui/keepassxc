@@ -30,7 +30,7 @@ class TestBrowser : public QObject
 
 private slots:
     void initTestCase();
-    void cleanupTestCase();
+    void init();
 
     void testChangePublicKeys();
     void testEncryptMessage();
@@ -40,15 +40,23 @@ private slots:
 
     void testBaseDomain();
     void testSortPriority();
+    void testSortPriority_data();
     void testSearchEntries();
+    void testSearchEntriesByPath();
+    void testSearchEntriesByUUID();
     void testSearchEntriesWithPort();
     void testSearchEntriesWithAdditionalURLs();
-    void testSortEntries();
-    void testGetDatabaseGroups();
+    void testInvalidEntries();
+    void testSubdomainsAndPaths();
+    void testValidURLs();
+    void testBestMatchingCredentials();
+    void testBestMatchingWithAdditionalURLs();
 
 private:
-    QScopedPointer<BrowserAction> m_browserAction;
-    QScopedPointer<BrowserService> m_browserService;
-};
+    QList<Entry*> createEntries(QStringList& urls, Group* root) const;
+    void compareEntriesByPath(QSharedPointer<Database> db, QList<Entry*> entries, QString path);
 
+    QScopedPointer<BrowserAction> m_browserAction;
+    QPointer<BrowserService> m_browserService;
+};
 #endif // KEEPASSXC_TESTBROWSER_H

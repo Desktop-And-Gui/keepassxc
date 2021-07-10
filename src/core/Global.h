@@ -20,21 +20,47 @@
 #ifndef KEEPASSX_GLOBAL_H
 #define KEEPASSX_GLOBAL_H
 
+#include <QString>
 #include <QtGlobal>
 
 #if defined(Q_OS_WIN)
 #if defined(KEEPASSX_BUILDING_CORE)
-#define KEEPASSX_EXPORT Q_DECL_IMPORT
+#define KEEPASSXC_EXPORT Q_DECL_IMPORT
 #else
-#define KEEPASSX_EXPORT Q_DECL_EXPORT
+#define KEEPASSXC_EXPORT Q_DECL_EXPORT
 #endif
 #else
-#define KEEPASSX_EXPORT Q_DECL_EXPORT
+#define KEEPASSXC_EXPORT Q_DECL_EXPORT
 #endif
 
 #ifndef QUINT32_MAX
 #define QUINT32_MAX 4294967295U
 #endif
+
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+#define FILE_CASE_SENSITIVE Qt::CaseInsensitive
+#else
+#define FILE_CASE_SENSITIVE Qt::CaseSensitive
+#endif
+
+static const auto TRUE_STR = QStringLiteral("true");
+static const auto FALSE_STR = QStringLiteral("false");
+
+enum IconSize
+{
+    Default,
+    Medium,
+    Large
+};
+
+enum class AuthDecision
+{
+    Undecided,
+    Allowed,
+    AllowedOnce,
+    Denied,
+    DeniedOnce,
+};
 
 template <typename T> struct AddConst
 {

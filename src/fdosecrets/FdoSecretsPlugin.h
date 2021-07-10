@@ -18,17 +18,19 @@
 #ifndef KEEPASSXC_FDOSECRETSPLUGIN_H
 #define KEEPASSXC_FDOSECRETSPLUGIN_H
 
-#include "core/FilePath.h"
 #include "gui/ApplicationSettingsWidget.h"
+#include "gui/Icons.h"
 
 #include <QPointer>
-#include <QScopedPointer>
+
+#include <memory>
 
 class DatabaseTabWidget;
 
 namespace FdoSecrets
 {
     class Service;
+    class DBusMgr;
 } // namespace FdoSecrets
 
 class FdoSecretsPlugin : public QObject, public ISettingsPage
@@ -45,7 +47,7 @@ public:
 
     QIcon icon() override
     {
-        return FilePath::instance()->icon("apps", "freedesktop");
+        return icons()->icon("freedesktop");
     }
 
     QWidget* createWidget() override;
@@ -59,18 +61,41 @@ public:
      */
     FdoSecrets::Service* serviceInstance() const;
 
+    /**
+     * @return The db tabs widget, containing opened databases. Can be nullptr.
+     */
+    DatabaseTabWidget* dbTabs() const;
+
+    /**
+     * @brief The dbus manager instance
+     * @return
+     */
+    const QSharedPointer<FdoSecrets::DBusMgr>& dbus() const;
+
+    // TODO: Only used for testing. Need to split service functions away from settings page.
+    static FdoSecretsPlugin* getPlugin();
+
 public slots:
     void emitRequestSwitchToDatabases();
     void emitRequestShowNotification(const QString& msg, const QString& title = {});
+
+    /**
+     * @brief Show error in the GUI
+     * @param msg
+     */
+    void emitError(const QString& msg);
 
 signals:
     void error(const QString& msg);
     void requestSwitchToDatabases();
     void requestShowNotification(const QString& msg, const QString& title, int msTimeoutHint);
+    void secretServiceStarted();
+    void secretServiceStopped();
 
 private:
     QPointer<DatabaseTabWidget> m_dbTabs;
-    QScopedPointer<FdoSecrets::Service> m_secretService;
+    QSharedPointer<FdoSecrets::DBusMgr> m_dbus;
+    QSharedPointer<FdoSecrets::Service> m_secretService;
 };
 
 #endif // KEEPASSXC_FDOSECRETSPLUGIN_H

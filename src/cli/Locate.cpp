@@ -15,18 +15,12 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cstdlib>
-#include <stdio.h>
-
 #include "Locate.h"
 
 #include <QStringList>
 
-#include "cli/TextStream.h"
-#include "cli/Utils.h"
-#include "core/Database.h"
-#include "core/Entry.h"
-#include "core/Global.h"
+#include "TextStream.h"
+#include "Utils.h"
 #include "core/Group.h"
 
 Locate::Locate()
@@ -38,20 +32,20 @@ Locate::Locate()
 
 int Locate::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
+    auto& out = Utils::STDOUT;
+    auto& err = Utils::STDERR;
 
     const QStringList args = parser->positionalArguments();
-    QString searchTerm = args.at(1);
-    TextStream outputTextStream(Utils::STDOUT, QIODevice::WriteOnly);
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    const QString& searchTerm = args.at(1);
 
     QStringList results = database->rootGroup()->locate(searchTerm);
     if (results.isEmpty()) {
-        errorTextStream << "No results for that search term." << endl;
+        err << "No results for that search term." << endl;
         return EXIT_FAILURE;
     }
 
     for (const QString& result : asConst(results)) {
-        outputTextStream << result << endl;
+        out << result << endl;
     }
     return EXIT_SUCCESS;
 }

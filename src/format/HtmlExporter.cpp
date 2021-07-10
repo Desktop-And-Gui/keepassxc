@@ -21,6 +21,7 @@
 #include <QFile>
 
 #include "core/Database.h"
+#include "core/Global.h"
 #include "core/Group.h"
 #include "core/Metadata.h"
 
@@ -28,8 +29,9 @@ namespace
 {
     QString PixmapToHTML(const QPixmap& pixmap)
     {
-        if (pixmap.isNull())
+        if (pixmap.isNull()) {
             return "";
+        }
 
         // Based on https://stackoverflow.com/a/6621278
         QByteArray a;
@@ -78,15 +80,11 @@ bool HtmlExporter::exportDatabase(QIODevice* device, const QSharedPointer<const 
                                   "th, td "
                                   "{ text-align: left; vertical-align: top; padding: 1px; }"
                                   "th "
-                                  "{ min-width: 5em; } "
+                                  "{ min-width: 5em; width: 20%; } "
                                   ".username, .password, .url, .attr "
                                   "{ font-size: larger; font-family: monospace; } "
                                   ".notes "
                                   "{ font-size: medium; } "
-                                  "@media print {"
-                                  ".entry"
-                                  "{ page-break-inside: avoid; } "
-                                  "}"
                                   "</style>"
                                   "</head>\n"
                                   "<body>"
@@ -141,7 +139,7 @@ bool HtmlExporter::writeGroup(QIODevice& device, const Group& group, QString pat
 
         // Header line
         auto header = QString("<hr><h2>");
-        header.append(PixmapToHTML(group.iconScaledPixmap()));
+        header.append(PixmapToHTML(group.iconPixmap(IconSize::Medium)));
         header.append("&nbsp;");
         header.append(path);
         header.append("</h2>\n");
@@ -160,23 +158,21 @@ bool HtmlExporter::writeGroup(QIODevice& device, const Group& group, QString pat
         }
     }
 
-    // Output the entries in this  group
-    for (const auto entry : entries) {
-        auto item = QString("<div class=\"entry\"><h3>");
+    // Begin the table for the entries in this group
+    auto table = QString("<table width=\"100%\">");
 
-        // Begin formatting this item into HTML
-        item.append(PixmapToHTML(entry->iconScaledPixmap()));
-        item.append("&nbsp;");
-        item.append(entry->title().toHtmlEscaped());
-        item.append("</h3>\n"
-                    "<table>");
+    // Output the entries in this group
+    for (const auto entry : entries) {
+
+        // Here we collect the table rows with this entry's data fields
+        QString item;
 
         // Output the fixed fields
         const auto& u = entry->username();
         if (!u.isEmpty()) {
             item.append("<tr><th>");
             item.append(QObject::tr("User name"));
-            item.append("</t><td class=\"username\">");
+            item.append("</th><td class=\"username\">");
             item.append(entry->username().toHtmlEscaped());
             item.append("</td></tr>");
         }
@@ -228,17 +224,31 @@ bool HtmlExporter::writeGroup(QIODevice& device, const Group& group, QString pat
                 item.append("<tr><th>");
                 item.append(key.toHtmlEscaped());
                 item.append("</th><td class=\"attr\">");
-                item.append(attr->value(key).toHtmlEscaped().replace("\n", "<br>"));
+                item.append(attr->value(key).toHtmlEscaped().replace(" ", "&nbsp;").replace("\n", "<br>"));
                 item.append("</td></tr>");
             }
         }
 
-        // Done with this entry
-        item.append("</table></div>\n");
-        if (device.write(item.toUtf8()) == -1) {
-            m_error = device.errorString();
-            return false;
-        }
+        // Skip if everything is empty
+        if (item.isEmpty())
+            continue;
+
+        // Output it into our table. First the left side with
+        // icon and entry title ...
+        table += "<tr>";
+        table += "<td width=\"1%\">" + PixmapToHTML(entry->iconPixmap(IconSize::Medium)) + "</td>";
+        table += "<td width=\"19%\" valign=\"top\"><h3>" + entry->title().toHtmlEscaped() + "</h3></td>";
+
+        // ... then the right side with the data fields
+        table += "<td style=\"padding-bottom: 0.5em;\"><table width=\"100%\">" + item + "</table></td>";
+        table += "</tr>";
+    }
+
+    // Output the complete table of this group
+    table.append("</table>\n");
+    if (device.write(table.toUtf8()) == -1) {
+        m_error = device.errorString();
+        return false;
     }
 
     // Recursively output the child groups

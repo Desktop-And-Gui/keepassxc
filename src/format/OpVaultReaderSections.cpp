@@ -31,15 +31,33 @@
 #include <QUrlQuery>
 #include <QUuid>
 
+namespace
+{
+    QDateTime resolveDate(const QString& kind, const QJsonValue& value)
+    {
+        QDateTime date;
+        if (kind == "monthYear") {
+            // 1Password programmers are sadistic...
+            auto dateValue = QString::number(value.toInt());
+            date = QDateTime::fromString(dateValue, "yyyyMM");
+            date.setTimeSpec(Qt::UTC);
+        } else if (value.isString()) {
+            date = QDateTime::fromTime_t(value.toString().toUInt(), Qt::UTC);
+        } else {
+            date = QDateTime::fromTime_t(value.toInt(), Qt::UTC);
+        }
+        return date;
+    }
+} // namespace
+
 void OpVaultReader::fillFromSection(Entry* entry, const QJsonObject& section)
 {
     const auto uuid = entry->uuid();
-    const QString& sectionName = section["name"].toString();
+    auto sectionTitle = section["title"].toString();
 
     if (!section.contains("fields")) {
-        auto sectionNameLC = sectionName.toLower();
-        auto sectionTitleLC = section["title"].toString("").toLower();
-        if (!(sectionNameLC == "linked items" && sectionTitleLC == "related items")) {
+        auto sectionName = section["name"].toString();
+        if (!(sectionName.toLower() == "linked items" && sectionTitle.toLower() == "related items")) {
             qWarning() << R"(Skipping "fields"-less Section in UUID ")" << uuid << "\": <<" << section << ">>";
         }
         return;
@@ -47,18 +65,18 @@ void OpVaultReader::fillFromSection(Entry* entry, const QJsonObject& section)
         qWarning() << R"(Skipping non-Array "fields" in UUID ")" << uuid << "\"\n";
         return;
     }
+
     QJsonArray sectionFields = section["fields"].toArray();
     for (const QJsonValue sectionField : sectionFields) {
         if (!sectionField.isObject()) {
             qWarning() << R"(Skipping non-Object "fields" in UUID ")" << uuid << "\": << " << sectionField << ">>";
             continue;
         }
-        QJsonObject field = sectionField.toObject();
-        fillFromSectionField(entry, sectionName, field);
+        fillFromSectionField(entry, sectionTitle, sectionField.toObject());
     }
 }
 
-void OpVaultReader::fillFromSectionField(Entry* entry, const QString& sectionName, QJsonObject& field)
+void OpVaultReader::fillFromSectionField(Entry* entry, const QString& sectionName, const QJsonObject& field)
 {
     if (!field.contains("v")) {
         // for our purposes, we don't care if there isn't a value in the field
@@ -68,7 +86,7 @@ void OpVaultReader::fillFromSectionField(Entry* entry, const QString& sectionNam
     // Ignore "a" and "inputTraits" fields, they don't apply to KPXC
 
     auto attrName = resolveAttributeName(sectionName, field["n"].toString(), field["t"].toString());
-    auto attrValue = field.value("v").toVariant().toString();
+    auto attrValue = field.value("v").toString();
     auto kind = field["k"].toString();
 
     if (attrName.startsWith("TOTP_")) {
@@ -82,30 +100,37 @@ void OpVaultReader::fillFromSectionField(Entry* entry, const QString& sectionNam
                 query.addQueryItem("period", QString("%1").arg(Totp::DEFAULT_STEP));
             }
             attrValue = query.toString(QUrl::FullyEncoded);
-        }
-        entry->attributes()->set(Totp::ATTRIBUTE_SETTINGS, attrValue, true);
-    } else if (attrName.startsWith("expir", Qt::CaseInsensitive)) {
-        QDateTime expiry;
-        if (kind == "date") {
-            expiry = QDateTime::fromTime_t(attrValue.toUInt(), Qt::UTC);
+            entry->setTotp(Totp::parseSettings(attrValue));
         } else {
-            expiry = QDateTime::fromString(attrValue, "yyyyMM");
-            expiry.setTimeSpec(Qt::UTC);
+            entry->setTotp(Totp::parseSettings({}, attrValue));
         }
 
+    } else if (attrName.startsWith("expir", Qt::CaseInsensitive)) {
+        QDateTime expiry = resolveDate(kind, field.value("v"));
         if (expiry.isValid()) {
             entry->setExpiryTime(expiry);
             entry->setExpires(true);
+        } else {
+            qWarning() << QString("[%1] Invalid expiration date found: %2").arg(entry->title(), attrValue);
         }
     } else {
-        if (kind == "date") {
-            auto date = QDateTime::fromTime_t(attrValue.toUInt(), Qt::UTC);
+        if (kind == "date" || kind == "monthYear") {
+            QDateTime date = resolveDate(kind, field.value("v"));
             if (date.isValid()) {
-                attrValue = date.toString();
+                entry->attributes()->set(attrName, date.toString(Qt::SystemLocaleShortDate));
+            } else {
+                qWarning()
+                    << QString("[%1] Invalid date attribute found: %2 = %3").arg(entry->title(), attrName, attrValue);
             }
+        } else if (kind == "address") {
+            // Expand address into multiple attributes
+            auto addrFields = field.value("v").toObject().toVariantMap();
+            for (auto part : addrFields.keys()) {
+                entry->attributes()->set(attrName + QString("_%1").arg(part), addrFields.value(part).toString());
+            }
+        } else {
+            entry->attributes()->set(attrName, attrValue, (kind == "password" || kind == "concealed"));
         }
-
-        entry->attributes()->set(attrName, attrValue, (kind == "password" || kind == "concealed"));
     }
 }
 
@@ -118,7 +143,7 @@ QString OpVaultReader::resolveAttributeName(const QString& section, const QStrin
 
     auto lowName = name.toLower();
     auto lowText = text.toLower();
-    if (section.isEmpty()) {
+    if (section.isEmpty() || name.startsWith("address")) {
         // Empty section implies these are core attributes
         // try to find username, password, url
         if (lowName == "password" || lowText == "password") {
@@ -129,8 +154,8 @@ QString OpVaultReader::resolveAttributeName(const QString& section, const QStrin
                    || lowName == "website") {
             return EntryAttributes::URLKey;
         }
-        return name;
+        return text;
     }
 
-    return QString("%1_%2").arg(section, name);
+    return QString("%1_%2").arg(section, text);
 }

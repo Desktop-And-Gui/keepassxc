@@ -45,14 +45,18 @@ signals:
 private slots:
     void insertAttachments();
     void removeSelectedAttachments();
+    void renameSelectedAttachments();
     void saveSelectedAttachments();
     void openAttachment(const QModelIndex& index);
     void openSelectedAttachments();
+    void updateButtonsVisible();
     void updateButtonsEnabled();
 
 private:
     bool insertAttachments(const QStringList& fileNames, QString& errorMessage);
     bool openAttachment(const QModelIndex& index, QString& errorMessage);
+
+    QStringList confirmLargeAttachments(const QStringList& filenames);
 
     bool eventFilter(QObject* watched, QEvent* event) override;
 

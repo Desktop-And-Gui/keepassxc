@@ -14,7 +14,7 @@
 #  You should have received a copy of the GNU General Public License
 #  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-cmake_minimum_required(VERSION 3.1.0)
+cmake_minimum_required(VERSION 3.3.0)
 
 project(KeePassXC)
 
@@ -27,15 +27,9 @@ string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LOWER)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
-# Use the Compiler Cache (ccache) if it is installed
-# (install with: sudo apt get ccache)
-find_program (CCACHE_FOUND ccache)
-if (CCACHE_FOUND)
-    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
-endif (CCACHE_FOUND)
-
 # Support Visual Studio Code
 include(CMakeToolsHelpers OPTIONAL)
+include(FeatureSummary)
 
 include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
@@ -47,6 +41,7 @@ option(WITH_DEV_BUILD "Use only for development. Disables/warns about deprecated
 option(WITH_ASAN "Enable address sanitizer checks (Linux / macOS only)" OFF)
 option(WITH_COVERAGE "Use to build with coverage tests (GCC only)." OFF)
 option(WITH_APP_BUNDLE "Enable Application Bundle for macOS" ON)
+option(WITH_CCACHE "Use ccache for build" OFF)
 
 set(WITH_XC_ALL OFF CACHE BOOL "Build in all available plugins")
 
@@ -63,9 +58,20 @@ endif()
 if(APPLE)
     option(WITH_XC_TOUCHID "Include TouchID support for macOS." OFF)
 endif()
+option(WITH_XC_DOCS "Enable building of documentation" ON)
+
+if(WITH_CCACHE)
+    # Use the Compiler Cache (ccache) program
+    # (install with: sudo apt get ccache)
+    find_program(CCACHE_FOUND ccache)
+    if(NOT CCACHE_FOUND)
+        message(FATAL_ERROR "ccache requested but cannot be found.")
+    endif()
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ${CCACHE_FOUND})
+endif()
 
 if(WITH_XC_ALL)
-    # Enable all options (except update check)
+    # Enable all options (except update check and docs)
     set(WITH_XC_AUTOTYPE ON)
     set(WITH_XC_NETWORKING ON)
     set(WITH_XC_BROWSER ON)
@@ -80,12 +86,6 @@ if(WITH_XC_ALL)
     endif()
 endif()
 
-if(WITH_XC_SSHAGENT OR WITH_XC_KEESHARE)
-  set(WITH_XC_CRYPTO_SSH ON)
-else()
-  set(WITH_XC_CRYPTO_SSH OFF)
-endif()
-
 # Prefer WITH_XC_NETWORKING setting over WITH_XC_UPDATECHECK
 if(NOT WITH_XC_NETWORKING AND WITH_XC_UPDATECHECK)
     message(STATUS "Disabling WITH_XC_UPDATECHECK because WITH_XC_NETWORKING is disabled")
@@ -93,7 +93,7 @@ if(NOT WITH_XC_NETWORKING AND WITH_XC_UPDATECHECK)
 endif()
 
 set(KEEPASSXC_VERSION_MAJOR "2")
-set(KEEPASSXC_VERSION_MINOR "5")
+set(KEEPASSXC_VERSION_MINOR "7")
 set(KEEPASSXC_VERSION_PATCH "0")
 set(KEEPASSXC_VERSION "${KEEPASSXC_VERSION_MAJOR}.${KEEPASSXC_VERSION_MINOR}.${KEEPASSXC_VERSION_PATCH}")
 set(OVERRIDE_VERSION "" CACHE STRING "Override the KeePassXC Version for Snapshot builds")
@@ -203,6 +203,40 @@ macro(add_gcc_compiler_flags FLAGS)
     add_gcc_compiler_cflags("${FLAGS}")
 endmacro(add_gcc_compiler_flags)
 
+# Copies of above macros that first ensure the compiler understands a given flag
+# Because check_*_compiler_flag() sets -D with name, need to provide "safe" FLAGNAME
+macro(check_add_gcc_compiler_cxxflag FLAG FLAGNAME)
+    check_cxx_compiler_flag("${FLAG}" CXX_HAS${FLAGNAME})
+    if(CXX_HAS${FLAGNAME})
+        add_gcc_compiler_cxxflags("${FLAG}")
+    endif()
+endmacro(check_add_gcc_compiler_cxxflag)
+
+macro(check_add_gcc_compiler_cflag FLAG FLAGNAME)
+    check_c_compiler_flag("${FLAG}" CC_HAS${FLAGNAME})
+    if(CC_HAS${FLAGNAME})
+        add_gcc_compiler_cflags("${FLAG}")
+    endif()
+endmacro(check_add_gcc_compiler_cflag)
+
+# This is the "front-end" for the above macros
+# Optionally takes additional parameter(s) with language to check (currently "C" or "CXX")
+macro(check_add_gcc_compiler_flag FLAG)
+    string(REGEX REPLACE "[-=]" "_" FLAGNAME "${FLAG}")
+    set(check_lang_spec ${ARGN})
+    list(LENGTH check_lang_spec num_extra_args)
+    set(langs C CXX)
+    if(num_extra_args GREATER 0)
+        set(langs "${check_lang_spec}")
+    endif()
+    if("C" IN_LIST langs)
+        check_add_gcc_compiler_cflag("${FLAG}" "${FLAGNAME}")
+    endif()
+    if("CXX" IN_LIST langs)
+        check_add_gcc_compiler_cxxflag("${FLAG}" "${FLAGNAME}")
+    endif()
+endmacro(check_add_gcc_compiler_flag)
+
 add_definitions(-DQT_NO_EXCEPTIONS -DQT_STRICT_ITERATORS -DQT_NO_CAST_TO_ASCII)
 
 if(WITH_APP_BUNDLE)
@@ -210,12 +244,15 @@ if(WITH_APP_BUNDLE)
 endif()
 
 add_gcc_compiler_flags("-fno-common")
+check_add_gcc_compiler_flag("-fopenmp")
 add_gcc_compiler_flags("-Wall -Wextra -Wundef -Wpointer-arith -Wno-long-long")
 add_gcc_compiler_flags("-Wformat=2 -Wmissing-format-attribute")
 add_gcc_compiler_flags("-fvisibility=hidden")
 add_gcc_compiler_cxxflags("-fvisibility-inlines-hidden")
 
 if(CMAKE_BUILD_TYPE_LOWER STREQUAL "debug")
+    check_add_gcc_compiler_flag("-Wshadow-compatible-local")
+    check_add_gcc_compiler_flag("-Wshadow-local")
     add_gcc_compiler_flags("-Werror")
 endif()
 
@@ -227,7 +264,6 @@ else()
 endif()
 endif()
 
-add_gcc_compiler_cxxflags("-fno-exceptions -fno-rtti")
 add_gcc_compiler_cxxflags("-Wnon-virtual-dtor -Wold-style-cast -Woverloaded-virtual")
 add_gcc_compiler_cflags("-Wchar-subscripts -Wwrite-strings")
 
@@ -250,16 +286,9 @@ if(CMAKE_BUILD_TYPE_LOWER MATCHES "(release|relwithdebinfo|minsizerel)")
     add_gcc_compiler_flags("-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
 endif()
 
-check_c_compiler_flag("-Werror=format-security -Werror=implicit-function-declaration" WERROR_C_AVAILABLE)
-check_cxx_compiler_flag("-Werror=format-security" WERROR_CXX_AVAILABLE)
-if(WERROR_C_AVAILABLE AND WERROR_CXX_AVAILABLE)
-    add_gcc_compiler_flags("-Werror=format-security")
-    add_gcc_compiler_cflags("-Werror=implicit-function-declaration")
-endif()
-
-if(CMAKE_COMPILER_IS_GNUCXX)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wcast-align")
-endif()
+check_add_gcc_compiler_flag("-Werror=format-security")
+check_add_gcc_compiler_flag("-Werror=implicit-function-declaration" C)
+check_add_gcc_compiler_flag("-Wcast-align")
 
 if(WITH_COVERAGE AND CMAKE_COMPILER_IS_CLANGXX)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
@@ -270,17 +299,11 @@ if(WITH_COVERAGE AND CMAKE_COMPILER_IS_CLANGXX)
   #      `find src -iname '*.h' -or -iname '*.cpp'`
 endif()
 
-if(CMAKE_COMPILER_IS_GNUCC)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wcast-align")
-endif()
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    if(CMAKE_COMPILER_IS_CLANGXX)
-        add_gcc_compiler_flags("-Qunused-arguments")
-    endif()
-    add_gcc_compiler_flags("-pie -fPIE")
+if(UNIX AND NOT APPLE)
+    check_add_gcc_compiler_flag("-Qunused-arguments")
+    check_add_gcc_compiler_flag("-fPIC")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--no-add-needed -Wl,--as-needed -Wl,--no-undefined")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,relro,-z,now")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,relro,-z,now -pie")
     set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,--no-add-needed -Wl,--as-needed")
     set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-z,relro,-z,now")
 endif()
@@ -288,17 +311,17 @@ endif()
 add_gcc_compiler_cflags("-std=c99")
 add_gcc_compiler_cxxflags("-std=c++11")
 
-if((CMAKE_COMPILER_IS_GNUCXX AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 4.9.99) OR
-    (CMAKE_COMPILER_IS_CLANGXX AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 3.6.99))
-    add_gcc_compiler_cxxflags("-fsized-deallocation")
-endif()
+check_add_gcc_compiler_flag("-fsized-deallocation" CXX)
 
 if(APPLE AND CMAKE_COMPILER_IS_CLANGXX)
     add_gcc_compiler_cxxflags("-stdlib=libc++")
 endif()
 
 if(WITH_DEV_BUILD)
-    add_definitions(-DQT_DEPRECATED_WARNINGS -DGCRYPT_NO_DEPRECATED)
+    add_definitions(-DQT_DEPRECATED_WARNINGS)
+else()
+    add_definitions(-DQT_NO_DEPRECATED_WARNINGS)
+    add_gcc_compiler_cxxflags("-Wno-deprecated-declarations")
 endif()
 
 if(MINGW)
@@ -330,12 +353,13 @@ if(MINGW)
     set(PLUGIN_INSTALL_DIR ".")
     set(DATA_INSTALL_DIR "share")
 elseif(APPLE AND WITH_APP_BUNDLE)
-    set(CMAKE_INSTALL_MANDIR "${PROGNAME}.app/Contents/Resources/man")
-    set(CLI_INSTALL_DIR "${PROGNAME}.app/Contents/MacOS")
-    set(PROXY_INSTALL_DIR "${PROGNAME}.app/Contents/MacOS")
-    set(BIN_INSTALL_DIR "${PROGNAME}.app/Contents/MacOS")
-    set(PLUGIN_INSTALL_DIR "${PROGNAME}.app/Contents/PlugIns")
-    set(DATA_INSTALL_DIR "${PROGNAME}.app/Contents/Resources")
+    set(BUNDLE_INSTALL_DIR "${PROGNAME}.app/Contents")
+    set(CMAKE_INSTALL_MANDIR "${BUNDLE_INSTALL_DIR}/Resources/man")
+    set(CLI_INSTALL_DIR "${BUNDLE_INSTALL_DIR}/MacOS")
+    set(PROXY_INSTALL_DIR "${BUNDLE_INSTALL_DIR}/MacOS")
+    set(BIN_INSTALL_DIR "${BUNDLE_INSTALL_DIR}/MacOS")
+    set(PLUGIN_INSTALL_DIR "${BUNDLE_INSTALL_DIR}/PlugIns")
+    set(DATA_INSTALL_DIR "${BUNDLE_INSTALL_DIR}/Resources")
 else()
     include(GNUInstallDirs)
 
@@ -369,10 +393,18 @@ include(CLangFormat)
 
 set(QT_COMPONENTS Core Network Concurrent Gui Svg Widgets Test LinguistTools)
 if(UNIX AND NOT APPLE)
-    find_package(Qt5 COMPONENTS ${QT_COMPONENTS} DBus REQUIRED)
+    find_package(Qt5 COMPONENTS ${QT_COMPONENTS} DBus X11Extras REQUIRED)
 elseif(APPLE)
-    find_package(Qt5 COMPONENTS ${QT_COMPONENTS} REQUIRED HINTS /usr/local/opt/qt/lib/cmake /usr/local/Cellar/qt/*/lib/cmake ENV PATH)
-    find_package(Qt5 COMPONENTS MacExtras HINTS /usr/local/opt/qt/lib/cmake /usr/local/Cellar/qt/*/lib/cmake ENV PATH)
+    find_package(Qt5 COMPONENTS ${QT_COMPONENTS} REQUIRED HINTS
+            /usr/local/opt/qt/lib/cmake
+            /usr/local/Cellar/qt/*/lib/cmake
+            /opt/homebrew/opt/qt/lib/cmake
+            ENV PATH)
+    find_package(Qt5 COMPONENTS MacExtras HINTS
+            /usr/local/opt/qt/lib/cmake
+            /usr/local/Cellar/qt/*/lib/cmake
+            /opt/homebrew/opt/qt/lib/cmake
+            ENV PATH)
 else()
     find_package(Qt5 COMPONENTS ${QT_COMPONENTS} REQUIRED)
 endif()
@@ -395,36 +427,36 @@ if(APPLE)
     find_program(MACDEPLOYQT_EXE macdeployqt HINTS ${Qt5_PREFIX}/bin ENV PATH)
     if(NOT MACDEPLOYQT_EXE)
         message(FATAL_ERROR "macdeployqt is required to build on macOS")
-    else()
-        message(STATUS "Using macdeployqt: ${MACDEPLOYQT_EXE}")
     endif()
+    message(STATUS "Using macdeployqt: ${MACDEPLOYQT_EXE}")
 elseif(MINGW)
     find_program(WINDEPLOYQT_EXE windeployqt HINTS ${Qt5_PREFIX}/bin ENV PATH)
     if(NOT WINDEPLOYQT_EXE)
         message(FATAL_ERROR "windeployqt is required to build on Windows")
-    else()
-        message(STATUS "Using windeployqt: ${WINDEPLOYQT_EXE}")
     endif()
+    message(STATUS "Using windeployqt: ${WINDEPLOYQT_EXE}")
 endif()
 
 # Debian sets the the build type to None for package builds.
 # Make sure we don't enable asserts there.
 set_property(DIRECTORY APPEND PROPERTY COMPILE_DEFINITIONS_NONE QT_NO_DEBUG)
 
-find_package(LibGPGError REQUIRED)
-find_package(Gcrypt 1.7.0 REQUIRED)
-find_package(Argon2 REQUIRED)
+# Find Botan2
+find_package(Botan2 REQUIRED)
+if(BOTAN2_VERSION VERSION_LESS "2.11.0")
+    message(FATAL_ERROR "Botan2 2.11.0 or higher is required")
+endif()
+include_directories(SYSTEM ${BOTAN2_INCLUDE_DIR})
+
+# Find zlib
 find_package(ZLIB REQUIRED)
-find_package(QREncode REQUIRED)
-find_package(sodium 1.0.12 REQUIRED)
-
-set(CMAKE_REQUIRED_INCLUDES ${ZLIB_INCLUDE_DIR})
-
 if(ZLIB_VERSION_STRING VERSION_LESS "1.2.0")
     message(FATAL_ERROR "zlib 1.2.0 or higher is required to use the gzip format")
 endif()
+include_directories(SYSTEM ${ZLIB_INCLUDE_DIR})
 
-include_directories(SYSTEM ${ARGON2_INCLUDE_DIR} ${sodium_INCLUDE_DIR})
+# QREncode required for TOTP
+find_package(QREncode REQUIRED)
 
 # Optional
 if(WITH_XC_YUBIKEY)
@@ -437,6 +469,14 @@ if(UNIX)
     check_cxx_source_compiles("#include <sys/prctl.h>
     int main() { prctl(PR_SET_DUMPABLE, 0); return 0; }"
             HAVE_PR_SET_DUMPABLE)
+
+    check_cxx_source_compiles("#include <malloc.h>
+    int main() { return 0; }"
+            HAVE_MALLOC_H)
+
+    check_cxx_source_compiles("#include <malloc.h>
+    int main() { malloc_usable_size(NULL, 0); return 0; }"
+            HAVE_MALLOC_USABLE_SIZE)
 
     check_cxx_source_compiles("#include <sys/resource.h>
     int main() {
@@ -455,15 +495,17 @@ if(UNIX)
     endif()
 endif()
 
-include_directories(SYSTEM ${GCRYPT_INCLUDE_DIR} ${ZLIB_INCLUDE_DIR})
-
-include(FeatureSummary)
+include_directories(SYSTEM ${ZLIB_INCLUDE_DIR})
 
 add_subdirectory(src)
 add_subdirectory(share)
 if(WITH_TESTS)
     add_subdirectory(tests)
 endif(WITH_TESTS)
+
+if(WITH_XC_DOCS)
+    add_subdirectory(docs)
+endif()
 
 if(PRINT_SUMMARY)
     # This will print ENABLED, REQUIRED and DISABLED

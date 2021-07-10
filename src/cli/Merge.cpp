@@ -15,13 +15,10 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cstdlib>
-
 #include "Merge.h"
 
-#include "cli/TextStream.h"
-#include "cli/Utils.h"
-#include "core/Database.h"
+#include "TextStream.h"
+#include "Utils.h"
 #include "core/Merger.h"
 
 const QCommandLineOption Merge::SameCredentialsOption =
@@ -30,8 +27,7 @@ const QCommandLineOption Merge::SameCredentialsOption =
                        QObject::tr("Use the same credentials for both database files."));
 
 const QCommandLineOption Merge::KeyFileFromOption =
-    QCommandLineOption(QStringList() << "k"
-                                     << "key-file-from",
+    QCommandLineOption(QStringList() << "key-file-from",
                        QObject::tr("Key file of the database to merge from."),
                        QObject::tr("path"));
 
@@ -62,9 +58,8 @@ Merge::Merge()
 
 int Merge::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
-    TextStream outputTextStream(parser->isSet(Command::QuietOption) ? Utils::DEVNULL : Utils::STDOUT,
-                                QIODevice::WriteOnly);
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    auto& out = parser->isSet(Command::QuietOption) ? Utils::DEVNULL : Utils::STDOUT;
+    auto& err = Utils::STDERR;
 
     const QStringList args = parser->positionalArguments();
 
@@ -77,8 +72,7 @@ int Merge::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer
                                     !parser->isSet(Merge::NoPasswordFromOption),
                                     parser->value(Merge::KeyFileFromOption),
                                     parser->value(Merge::YubiKeyFromOption),
-                                    parser->isSet(Command::QuietOption) ? Utils::DEVNULL : Utils::STDOUT,
-                                    Utils::STDERR);
+                                    parser->isSet(Command::QuietOption));
         if (!db2) {
             return EXIT_FAILURE;
         }
@@ -86,7 +80,7 @@ int Merge::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer
         db2 = QSharedPointer<Database>::create();
         QString errorMessage;
         if (!db2->open(fromDatabasePath, database->key(), &errorMessage, false)) {
-            errorTextStream << QObject::tr("Error reading merge file:\n%1").arg(errorMessage);
+            err << QObject::tr("Error reading merge file:\n%1").arg(errorMessage);
             return EXIT_FAILURE;
         }
     }
@@ -95,19 +89,18 @@ int Merge::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer
     QStringList changeList = merger.merge();
 
     for (auto& mergeChange : changeList) {
-        outputTextStream << "\t" << mergeChange << endl;
+        out << "\t" << mergeChange << endl;
     }
 
     if (!changeList.isEmpty() && !parser->isSet(Merge::DryRunOption)) {
         QString errorMessage;
         if (!database->save(&errorMessage, true, false)) {
-            errorTextStream << QObject::tr("Unable to save database to file : %1").arg(errorMessage) << endl;
+            err << QObject::tr("Unable to save database to file : %1").arg(errorMessage) << endl;
             return EXIT_FAILURE;
         }
-        outputTextStream << QObject::tr("Successfully merged %1 into %2.").arg(fromDatabasePath, toDatabasePath)
-                         << endl;
+        out << QObject::tr("Successfully merged %1 into %2.").arg(fromDatabasePath, toDatabasePath) << endl;
     } else {
-        outputTextStream << QObject::tr("Database was not modified by merge operation.") << endl;
+        out << QObject::tr("Database was not modified by merge operation.") << endl;
     }
 
     return EXIT_SUCCESS;

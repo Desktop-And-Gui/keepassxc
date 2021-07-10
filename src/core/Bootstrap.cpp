@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2020 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,7 +19,6 @@
 #include "config-keepassx.h"
 #include "core/Config.h"
 #include "core/Translator.h"
-#include "gui/MessageBox.h"
 
 #ifdef Q_OS_WIN
 #include <aclapi.h> // for createWindowsDACL()
@@ -70,59 +69,11 @@ namespace Bootstrap
 #ifdef QT_NO_DEBUG
         disableCoreDumps();
 #endif
+
         setupSearchPaths();
         applyEarlyQNetworkAccessManagerWorkaround();
+
         Translator::installTranslators();
-    }
-
-    /**
-     * Perform early application bootstrapping such as setting up search paths,
-     * configuration OS security properties, and loading translators.
-     * A QApplication object has to be instantiated before calling this function.
-     */
-    void bootstrapApplication()
-    {
-        bootstrap();
-        MessageBox::initializeButtonDefs();
-
-#ifdef KEEPASSXC_DIST_SNAP
-        // snap: force fallback theme to avoid using system theme (gtk integration)
-        // with missing actions just like on Windows and macOS
-        QIcon::setThemeSearchPaths(QStringList() << ":/icons");
-#endif
-
-#ifdef Q_OS_MACOS
-        // Don't show menu icons on OSX
-        QApplication::setAttribute(Qt::AA_DontShowIconsInMenus);
-#endif
-    }
-
-    /**
-     * Restore the main window's state after launch
-     *
-     * @param mainWindow the main window whose state to restore
-     */
-    void restoreMainWindowState(MainWindow& mainWindow)
-    {
-        // start minimized if configured
-        if (config()->get("GUI/MinimizeOnStartup").toBool()) {
-            mainWindow.showMinimized();
-        } else {
-            mainWindow.bringToFront();
-        }
-
-        if (config()->get("OpenPreviousDatabasesOnStartup").toBool()) {
-            const QStringList fileNames = config()->get("LastOpenedDatabases").toStringList();
-            for (const QString& filename : fileNames) {
-                if (!filename.isEmpty() && QFile::exists(filename)) {
-                    mainWindow.openDatabase(filename);
-                }
-            }
-            auto lastActiveFile = config()->get("LastActiveDatabase").toString();
-            if (!lastActiveFile.isEmpty()) {
-                mainWindow.openDatabase(lastActiveFile);
-            }
-        }
     }
 
     // LCOV_EXCL_START

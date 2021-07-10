@@ -15,15 +15,9 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cstdlib>
-#include <stdio.h>
-
 #include "List.h"
-#include "cli/Utils.h"
 
-#include "cli/TextStream.h"
-#include "core/Database.h"
-#include "core/Entry.h"
+#include "Utils.h"
 #include "core/Group.h"
 
 const QCommandLineOption List::RecursiveOption =
@@ -47,8 +41,8 @@ List::List()
 
 int List::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
-    TextStream outputTextStream(Utils::STDOUT, QIODevice::WriteOnly);
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    auto& out = Utils::STDOUT;
+    auto& err = Utils::STDERR;
 
     const QStringList args = parser->positionalArguments();
     bool recursive = parser->isSet(List::RecursiveOption);
@@ -56,17 +50,17 @@ int List::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<
 
     // No group provided, defaulting to root group.
     if (args.size() == 1) {
-        outputTextStream << database->rootGroup()->print(recursive, flatten) << flush;
+        out << database->rootGroup()->print(recursive, flatten) << flush;
         return EXIT_SUCCESS;
     }
 
-    QString groupPath = args.at(1);
+    const QString& groupPath = args.at(1);
     Group* group = database->rootGroup()->findGroupByPath(groupPath);
     if (!group) {
-        errorTextStream << QObject::tr("Cannot find group %1.").arg(groupPath) << endl;
+        err << QObject::tr("Cannot find group %1.").arg(groupPath) << endl;
         return EXIT_FAILURE;
     }
 
-    outputTextStream << group->print(recursive, flatten) << flush;
+    out << group->print(recursive, flatten) << flush;
     return EXIT_SUCCESS;
 }

@@ -18,9 +18,10 @@
 #ifndef KEEPASSXC_FDOSECRETS_COLLECTION_H
 #define KEEPASSXC_FDOSECRETS_COLLECTION_H
 
-#include "DBusObject.h"
+#include "fdosecrets/dbus/DBusClient.h"
+#include "fdosecrets/dbus/DBusObject.h"
 
-#include "adaptors/CollectionAdaptor.h"
+#include "core/EntrySearcher.h"
 
 #include <QPointer>
 #include <QSet>
@@ -38,29 +39,42 @@ namespace FdoSecrets
     class Collection : public DBusObject
     {
         Q_OBJECT
-    public:
+        Q_CLASSINFO("D-Bus Interface", DBUS_INTERFACE_SECRET_COLLECTION_LITERAL)
+
         explicit Collection(Service* parent, DatabaseWidget* backend);
 
-        DBusReturn<const QList<Item*>> items() const;
+    public:
+        /**
+         * @brief Create a new instance of `Collection`
+         * @param parent the owning Service
+         * @param backend the widget containing the database
+         * @return pointer to created instance, or nullptr when error happens.
+         * This may be caused by
+         *   - DBus path registration error
+         *   - database has no exposed group
+         */
+        static Collection* Create(Service* parent, DatabaseWidget* backend);
 
-        DBusReturn<QString> label() const;
-        DBusReturn<void> setLabel(const QString& label);
+        Q_INVOKABLE DBUS_PROPERTY DBusResult items(QList<Item*>& items) const;
 
-        DBusReturn<bool> locked() const;
+        Q_INVOKABLE DBUS_PROPERTY DBusResult label(QString& label) const;
+        Q_INVOKABLE DBusResult setLabel(const QString& label);
 
-        DBusReturn<qulonglong> created() const;
+        Q_INVOKABLE DBUS_PROPERTY DBusResult locked(bool& locked) const;
 
-        DBusReturn<qulonglong> modified() const;
+        Q_INVOKABLE DBUS_PROPERTY DBusResult created(qulonglong& created) const;
 
-        DBusReturn<PromptBase*> deleteCollection();
-        DBusReturn<const QList<Item*>> searchItems(const StringStringMap& attributes);
-        DBusReturn<Item*>
-        createItem(const QVariantMap& properties, const SecretStruct& secret, bool replace, PromptBase*& prompt);
+        Q_INVOKABLE DBUS_PROPERTY DBusResult modified(qulonglong& modified) const;
+
+        Q_INVOKABLE DBusResult remove(const DBusClientPtr& client, PromptBase*& prompt);
+        Q_INVOKABLE DBusResult searchItems(const StringStringMap& attributes, QList<Item*>& items);
+        Q_INVOKABLE DBusResult
+        createItem(const QVariantMap& properties, const Secret& secret, bool replace, Item*& item, PromptBase*& prompt);
 
     signals:
-        void itemCreated(const Item* item);
-        void itemDeleted(const Item* item);
-        void itemChanged(const Item* item);
+        void itemCreated(Item* item);
+        void itemDeleted(Item* item);
+        void itemChanged(Item* item);
 
         void collectionChanged();
         void collectionAboutToDelete();
@@ -70,11 +84,18 @@ namespace FdoSecrets
         void aliasAdded(const QString& alias);
         void aliasRemoved(const QString& alias);
 
-    public:
-        DBusReturn<void> setProperties(const QVariantMap& properties);
+        void doneUnlockCollection(bool accepted);
 
-        DBusReturn<void> removeAlias(QString alias);
-        DBusReturn<void> addAlias(QString alias);
+    public:
+        DBusResult setProperties(const QVariantMap& properties);
+
+        bool isValid() const
+        {
+            return backend();
+        }
+
+        DBusResult removeAlias(QString alias);
+        DBusResult addAlias(QString alias);
         const QSet<QString> aliases() const;
 
         /**
@@ -90,20 +111,28 @@ namespace FdoSecrets
         bool inRecycleBin(Group* group) const;
         bool inRecycleBin(Entry* entry) const;
 
+        static EntrySearcher::SearchTerm attributeToTerm(const QString& key, const QString& value);
+
     public slots:
-        // expose some methods for Prmopt to use
-        void doLock();
+        // expose some methods for Prompt to use
+        bool doLock();
         void doUnlock();
+        Item* doNewItem(const DBusClientPtr& client, QString itemPath);
         // will remove self
         void doDelete();
 
         // delete the Entry in backend from this collection
         void doDeleteEntries(QList<Entry*> entries);
 
+        // force reload info from backend, potentially delete self
+        bool reloadBackend();
+
     private slots:
         void onDatabaseLockChanged();
         void onDatabaseExposedGroupChanged();
-        void reloadBackend();
+
+        // calls reloadBackend, delete self when error
+        void reloadBackendOrDelete();
 
     private:
         friend class DeleteCollectionPrompt;
@@ -120,13 +149,13 @@ namespace FdoSecrets
          * Check if the backend is a valid object, send error reply if not.
          * @return true if the backend is valid.
          */
-        DBusReturn<void> ensureBackend() const;
+        DBusResult ensureBackend() const;
 
         /**
          * Ensure the database is unlocked, send error reply if locked.
          * @return true if the database is locked
          */
-        DBusReturn<void> ensureUnlocked() const;
+        DBusResult ensureUnlocked() const;
 
         /**
          * Like mkdir -p, find or create the group by path, under m_exposedGroup
@@ -143,8 +172,6 @@ namespace FdoSecrets
         QSet<QString> m_aliases;
         QList<Item*> m_items;
         QMap<const Entry*, Item*> m_entryToItem;
-
-        bool m_registered;
     };
 
 } // namespace FdoSecrets

@@ -23,6 +23,7 @@ QTEST_GUILESS_MAIN(TestEntrySearcher)
 void TestEntrySearcher::init()
 {
     m_rootGroup = new Group();
+    m_entrySearcher = EntrySearcher();
 }
 
 void TestEntrySearcher::cleanup()
@@ -197,22 +198,22 @@ void TestEntrySearcher::testSearchTermParser()
 
     QCOMPARE(terms.length(), 5);
 
-    QCOMPARE(terms[0]->field, EntrySearcher::Field::Undefined);
-    QCOMPARE(terms[0]->word, QString("test"));
-    QCOMPARE(terms[0]->exclude, true);
+    QCOMPARE(terms[0].field, EntrySearcher::Field::Undefined);
+    QCOMPARE(terms[0].word, QString("test"));
+    QCOMPARE(terms[0].exclude, true);
 
-    QCOMPARE(terms[1]->field, EntrySearcher::Field::Undefined);
-    QCOMPARE(terms[1]->word, QString("quoted \\\"string\\\""));
-    QCOMPARE(terms[1]->exclude, false);
+    QCOMPARE(terms[1].field, EntrySearcher::Field::Undefined);
+    QCOMPARE(terms[1].word, QString("quoted \\\"string\\\""));
+    QCOMPARE(terms[1].exclude, false);
 
-    QCOMPARE(terms[2]->field, EntrySearcher::Field::Username);
-    QCOMPARE(terms[2]->word, QString("user"));
+    QCOMPARE(terms[2].field, EntrySearcher::Field::Username);
+    QCOMPARE(terms[2].word, QString("user"));
 
-    QCOMPARE(terms[3]->field, EntrySearcher::Field::Password);
-    QCOMPARE(terms[3]->word, QString("test me"));
+    QCOMPARE(terms[3].field, EntrySearcher::Field::Password);
+    QCOMPARE(terms[3].word, QString("test me"));
 
-    QCOMPARE(terms[4]->field, EntrySearcher::Field::Undefined);
-    QCOMPARE(terms[4]->word, QString("noquote"));
+    QCOMPARE(terms[4].field, EntrySearcher::Field::Undefined);
+    QCOMPARE(terms[4].word, QString("noquote"));
 
     // Test wildcard and regex search terms
     m_entrySearcher.parseSearchTerms("+url:*.google.com *user:\\d+\\w{2}");
@@ -220,11 +221,11 @@ void TestEntrySearcher::testSearchTermParser()
 
     QCOMPARE(terms.length(), 2);
 
-    QCOMPARE(terms[0]->field, EntrySearcher::Field::Url);
-    QCOMPARE(terms[0]->regex.pattern(), QString("^.*\\.google\\.com$"));
+    QCOMPARE(terms[0].field, EntrySearcher::Field::Url);
+    QCOMPARE(terms[0].regex.pattern(), QString("^.*\\.google\\.com$"));
 
-    QCOMPARE(terms[1]->field, EntrySearcher::Field::Username);
-    QCOMPARE(terms[1]->regex.pattern(), QString("\\d+\\w{2}"));
+    QCOMPARE(terms[1].field, EntrySearcher::Field::Username);
+    QCOMPARE(terms[1].regex.pattern(), QString("\\d+\\w{2}"));
 
     // Test custom attribute search terms
     m_entrySearcher.parseSearchTerms("+_abc:efg _def:\"ddd\"");
@@ -232,13 +233,13 @@ void TestEntrySearcher::testSearchTermParser()
 
     QCOMPARE(terms.length(), 2);
 
-    QCOMPARE(terms[0]->field, EntrySearcher::Field::AttributeValue);
-    QCOMPARE(terms[0]->word, QString("abc"));
-    QCOMPARE(terms[0]->regex.pattern(), QString("^efg$"));
+    QCOMPARE(terms[0].field, EntrySearcher::Field::AttributeValue);
+    QCOMPARE(terms[0].word, QString("abc"));
+    QCOMPARE(terms[0].regex.pattern(), QString("^efg$"));
 
-    QCOMPARE(terms[1]->field, EntrySearcher::Field::AttributeValue);
-    QCOMPARE(terms[1]->word, QString("def"));
-    QCOMPARE(terms[1]->regex.pattern(), QString("ddd"));
+    QCOMPARE(terms[1].field, EntrySearcher::Field::AttributeValue);
+    QCOMPARE(terms[1].word, QString("def"));
+    QCOMPARE(terms[1].regex.pattern(), QString("ddd"));
 }
 
 void TestEntrySearcher::testCustomAttributesAreSearched()
@@ -259,6 +260,113 @@ void TestEntrySearcher::testCustomAttributesAreSearched()
     QCOMPARE(m_searchResult.count(), 2);
 
     // protected attributes are ignored
+    m_entrySearcher = EntrySearcher(false, true);
     m_searchResult = m_entrySearcher.search("_testAttribute:test _testProtected:testP2", m_rootGroup);
     QCOMPARE(m_searchResult.count(), 2);
+}
+
+void TestEntrySearcher::testGroup()
+{
+    /**
+     * Root
+     * - group1 (1 entry)
+     *   - subgroup1 (2 entries)
+     * - group2
+     *   - subgroup2 (1 entry)
+     */
+    Group* group1 = new Group();
+    Group* group2 = new Group();
+
+    group1->setParent(m_rootGroup);
+    group1->setName("group1");
+    group2->setParent(m_rootGroup);
+    group2->setName("group2");
+
+    Group* subgroup1 = new Group();
+    subgroup1->setName("subgroup1");
+    subgroup1->setParent(group1);
+
+    Group* subgroup2 = new Group();
+    subgroup2->setName("subgroup2");
+    subgroup2->setParent(group2);
+
+    Entry* eGroup1 = new Entry();
+    eGroup1->setTitle("Entry Group 1");
+    eGroup1->setGroup(group1);
+
+    Entry* eSub1 = new Entry();
+    eSub1->setTitle("test search term test");
+    eSub1->setGroup(subgroup1);
+
+    Entry* eSub2 = new Entry();
+    eSub2->setNotes("test test");
+    eSub2->setGroup(subgroup1);
+
+    Entry* eSub3 = new Entry();
+    eSub3->setNotes("test term test");
+    eSub3->setGroup(subgroup2);
+
+    m_searchResult = m_entrySearcher.search("group:subgroup", m_rootGroup);
+    QCOMPARE(m_searchResult.count(), 3);
+
+    m_searchResult = m_entrySearcher.search("g:subgroup1", m_rootGroup);
+    QCOMPARE(m_searchResult.count(), 2);
+
+    m_searchResult = m_entrySearcher.search("g:subgroup1 search", m_rootGroup);
+    QCOMPARE(m_searchResult.count(), 1);
+
+    m_searchResult = m_entrySearcher.search("g:*1/sub*1", m_rootGroup);
+    QCOMPARE(m_searchResult.count(), 2);
+
+    m_searchResult = m_entrySearcher.search("g:/group1 search", m_rootGroup);
+    QCOMPARE(m_searchResult.count(), 1);
+}
+
+void TestEntrySearcher::testSkipProtected()
+{
+    QScopedPointer<Entry> e1(new Entry());
+    e1->setGroup(m_rootGroup);
+
+    e1->attributes()->set("testAttribute", "testE1");
+    e1->attributes()->set("testProtected", "apple", true);
+
+    QScopedPointer<Entry> e2(new Entry());
+    e2->setGroup(m_rootGroup);
+    e2->attributes()->set("testAttribute", "testE2");
+    e2->attributes()->set("testProtected", "banana", true);
+
+    const QList<Entry*> expectE1{e1.data()};
+    const QList<Entry*> expectE2{e2.data()};
+    const QList<Entry*> expectBoth{e1.data(), e2.data()};
+
+    // when not skipping protected, empty term matches everything
+    m_searchResult = m_entrySearcher.search("", m_rootGroup);
+    QCOMPARE(m_searchResult, expectBoth);
+
+    // now test the searcher with skipProtected = true
+    m_entrySearcher = EntrySearcher(false, true);
+
+    // when skipping protected, empty term matches nothing
+    m_searchResult = m_entrySearcher.search("", m_rootGroup);
+    QCOMPARE(m_searchResult, {});
+
+    // having a protected entry in terms should not affect the results in anyways
+    m_searchResult = m_entrySearcher.search("_testProtected:apple", m_rootGroup);
+    QCOMPARE(m_searchResult, {});
+    m_searchResult = m_entrySearcher.search("_testProtected:apple _testAttribute:testE2", m_rootGroup);
+    QCOMPARE(m_searchResult, expectE2);
+    m_searchResult = m_entrySearcher.search("_testProtected:apple _testAttribute:testE1", m_rootGroup);
+    QCOMPARE(m_searchResult, expectE1);
+    m_searchResult =
+        m_entrySearcher.search("_testProtected:apple _testAttribute:testE1 _testAttribute:testE2", m_rootGroup);
+    QCOMPARE(m_searchResult, {});
+
+    // also move the protected term around to execurise the short-circut logic
+    m_searchResult = m_entrySearcher.search("_testAttribute:testE2 _testProtected:apple", m_rootGroup);
+    QCOMPARE(m_searchResult, expectE2);
+    m_searchResult = m_entrySearcher.search("_testAttribute:testE1 _testProtected:apple", m_rootGroup);
+    QCOMPARE(m_searchResult, expectE1);
+    m_searchResult =
+        m_entrySearcher.search("_testAttribute:testE1 _testProtected:apple _testAttribute:testE2", m_rootGroup);
+    QCOMPARE(m_searchResult, {});
 }

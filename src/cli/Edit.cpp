@@ -15,19 +15,13 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cstdlib>
-#include <stdio.h>
-
 #include "Edit.h"
 
-#include "cli/Add.h"
-#include "cli/Generate.h"
-#include "cli/TextStream.h"
-#include "cli/Utils.h"
-#include "core/Database.h"
+#include "Add.h"
+#include "Generate.h"
+#include "Utils.h"
 #include "core/Entry.h"
 #include "core/Group.h"
-#include "core/PasswordGenerator.h"
 
 const QCommandLineOption Edit::TitleOption = QCommandLineOption(QStringList() << "t"
                                                                               << "title",
@@ -41,6 +35,7 @@ Edit::Edit()
     // Using some of the options from the Add command since they are the same.
     options.append(Add::UsernameOption);
     options.append(Add::UrlOption);
+    options.append(Add::NotesOption);
     options.append(Add::PasswordPromptOption);
     options.append(Edit::TitleOption);
     positionalArguments.append({QString("entry"), QObject::tr("Path of the entry to edit."), QString("")});
@@ -60,16 +55,15 @@ Edit::Edit()
 
 int Edit::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
-    TextStream outputTextStream(parser->isSet(Command::QuietOption) ? Utils::DEVNULL : Utils::STDOUT,
-                                QIODevice::WriteOnly);
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    auto& out = parser->isSet(Command::QuietOption) ? Utils::DEVNULL : Utils::STDOUT;
+    auto& err = Utils::STDERR;
 
     const QStringList args = parser->positionalArguments();
     const QString& entryPath = args.at(1);
 
     // Cannot use those 2 options at the same time!
     if (parser->isSet(Add::GenerateOption) && parser->isSet(Add::PasswordPromptOption)) {
-        errorTextStream << QObject::tr("Cannot generate a password and prompt at the same time!") << endl;
+        err << QObject::tr("Cannot generate a password and prompt at the same time.") << endl;
         return EXIT_FAILURE;
     }
 
@@ -86,16 +80,17 @@ int Edit::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<
 
     Entry* entry = database->rootGroup()->findEntryByPath(entryPath);
     if (!entry) {
-        errorTextStream << QObject::tr("Could not find entry with path %1.").arg(entryPath) << endl;
+        err << QObject::tr("Could not find entry with path %1.").arg(entryPath) << endl;
         return EXIT_FAILURE;
     }
 
     QString username = parser->value(Add::UsernameOption);
     QString url = parser->value(Add::UrlOption);
+    QString notes = parser->value(Add::NotesOption);
     QString title = parser->value(Edit::TitleOption);
     bool prompt = parser->isSet(Add::PasswordPromptOption);
-    if (username.isEmpty() && url.isEmpty() && title.isEmpty() && !prompt && !generate) {
-        errorTextStream << QObject::tr("Not changing any field for entry %1.").arg(entryPath) << endl;
+    if (username.isEmpty() && url.isEmpty() && notes.isEmpty() && title.isEmpty() && !prompt && !generate) {
+        err << QObject::tr("Not changing any field for entry %1.").arg(entryPath) << endl;
         return EXIT_FAILURE;
     }
 
@@ -109,13 +104,17 @@ int Edit::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<
         entry->setUsername(username);
     }
 
+    if (!notes.isEmpty()) {
+        entry->setNotes(notes.replace("\\n", "\n"));
+    }
+
     if (!url.isEmpty()) {
         entry->setUrl(url);
     }
 
     if (prompt) {
-        outputTextStream << QObject::tr("Enter new password for entry: ") << flush;
-        QString password = Utils::getPassword(parser->isSet(Command::QuietOption) ? Utils::DEVNULL : Utils::STDOUT);
+        out << QObject::tr("Enter new password for entry: ") << flush;
+        QString password = Utils::getPassword(parser->isSet(Command::QuietOption));
         entry->setPassword(password);
     } else if (generate) {
         QString password = passwordGenerator->generatePassword();
@@ -126,10 +125,10 @@ int Edit::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<
 
     QString errorMessage;
     if (!database->save(&errorMessage, true, false)) {
-        errorTextStream << QObject::tr("Writing the database failed: %1").arg(errorMessage) << endl;
+        err << QObject::tr("Writing the database failed: %1").arg(errorMessage) << endl;
         return EXIT_FAILURE;
     }
 
-    outputTextStream << QObject::tr("Successfully edited entry %1.").arg(entry->title()) << endl;
+    out << QObject::tr("Successfully edited entry %1.").arg(entry->title()) << endl;
     return EXIT_SUCCESS;
 }

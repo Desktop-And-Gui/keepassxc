@@ -32,6 +32,7 @@
 #include <QRegularExpression>
 #include <QStringList>
 #include <QSysInfo>
+#include <QUrl>
 #include <QUuid>
 #include <cctype>
 
@@ -108,9 +109,13 @@ namespace Tools
 #ifdef WITH_XC_TOUCHID
         extensions += "\n- " + QObject::tr("TouchID");
 #endif
+#ifdef WITH_XC_FDOSECRETS
+        extensions += "\n- " + QObject::tr("Secret Service Integration");
+#endif
 
-        if (extensions.isEmpty())
+        if (extensions.isEmpty()) {
             extensions = " " + QObject::tr("None");
+        }
 
         debugInfo.append(QObject::tr("Enabled extensions:").append(extensions).append("\n"));
         return debugInfo;
@@ -256,6 +261,34 @@ namespace Tools
         }
     }
 
+    bool checkUrlValid(const QString& urlField)
+    {
+        if (urlField.isEmpty() || urlField.startsWith("cmd://", Qt::CaseInsensitive)
+            || urlField.startsWith("{REF:A", Qt::CaseInsensitive)) {
+            return true;
+        }
+
+        QUrl url;
+        if (urlField.contains("://")) {
+            url = urlField;
+        } else {
+            url = QUrl::fromUserInput(urlField);
+        }
+
+        if (url.scheme() != "file" && url.host().isEmpty()) {
+            return false;
+        }
+
+        // Check for illegal characters. Adds also the wildcard * to the list
+        QRegularExpression re("[<>\\^`{|}\\*]");
+        auto match = re.match(urlField);
+        if (match.hasMatch()) {
+            return false;
+        }
+
+        return true;
+    }
+
     // Escape common regex symbols except for *, ?, and |
     auto regexEscape = QRegularExpression(R"re(([-[\]{}()+.,\\\/^$#]))re");
 
@@ -293,29 +326,30 @@ namespace Tools
         return QUuid::fromRfc4122(QByteArray::fromHex(uuid.toLatin1()));
     }
 
-    Buffer::Buffer()
-        : raw(nullptr)
-        , size(0)
+    QString envSubstitute(const QString& filepath, QProcessEnvironment environment)
     {
-    }
+        QString subbed = filepath;
 
-    Buffer::~Buffer()
-    {
-        clear();
-    }
+#if defined(Q_OS_WIN)
+        QRegularExpression varRe("\\%([A-Za-z][A-Za-z0-9_]*)\\%");
+        QString homeEnv = "USERPROFILE";
+#else
+        QRegularExpression varRe("\\$([A-Za-z][A-Za-z0-9_]*)");
+        QString homeEnv = "HOME";
+#endif
 
-    void Buffer::clear()
-    {
-        if (size > 0) {
-            free(raw);
-        }
-        raw = nullptr;
-        size = 0;
-    }
+        if (subbed.startsWith("~/") || subbed.startsWith("~\\"))
+            subbed.replace(0, 1, environment.value(homeEnv));
 
-    QByteArray Buffer::content() const
-    {
-        return QByteArray(reinterpret_cast<char*>(raw), size);
-    }
+        QRegularExpressionMatch match;
 
+        do {
+            match = varRe.match(subbed);
+            if (match.hasMatch()) {
+                subbed.replace(match.capturedStart(), match.capturedLength(), environment.value(match.captured(1)));
+            }
+        } while (match.hasMatch());
+
+        return subbed;
+    }
 } // namespace Tools

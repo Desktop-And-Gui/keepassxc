@@ -20,10 +20,10 @@
 #include "ui_EditGroupWidgetMain.h"
 
 #include "core/Config.h"
-#include "core/FilePath.h"
 #include "core/Metadata.h"
 #include "gui/EditWidgetIcons.h"
 #include "gui/EditWidgetProperties.h"
+#include "gui/Icons.h"
 #include "gui/MessageBox.h"
 
 #if defined(WITH_XC_KEESHARE)
@@ -62,19 +62,19 @@ private:
 EditGroupWidget::EditGroupWidget(QWidget* parent)
     : EditWidget(parent)
     , m_mainUi(new Ui::EditGroupWidgetMain())
-    , m_editGroupWidgetMain(new QWidget())
+    , m_editGroupWidgetMain(new QScrollArea())
     , m_editGroupWidgetIcons(new EditWidgetIcons())
     , m_editWidgetProperties(new EditWidgetProperties())
     , m_group(nullptr)
 {
     m_mainUi->setupUi(m_editGroupWidgetMain);
 
-    addPage(tr("Group"), FilePath::instance()->icon("actions", "document-edit"), m_editGroupWidgetMain);
-    addPage(tr("Icon"), FilePath::instance()->icon("apps", "preferences-desktop-icons"), m_editGroupWidgetIcons);
+    addPage(tr("Group"), icons()->icon("document-edit"), m_editGroupWidgetMain);
+    addPage(tr("Icon"), icons()->icon("preferences-desktop-icons"), m_editGroupWidgetIcons);
 #if defined(WITH_XC_KEESHARE)
     addEditPage(new EditGroupPageKeeShare(this));
 #endif
-    addPage(tr("Properties"), FilePath::instance()->icon("actions", "document-properties"), m_editWidgetProperties);
+    addPage(tr("Properties"), icons()->icon("document-properties"), m_editWidgetProperties);
 
     connect(m_mainUi->expireCheck, SIGNAL(toggled(bool)), m_mainUi->expireDatePicker, SLOT(setEnabled(bool)));
     connect(m_mainUi->autoTypeSequenceCustomRadio,
@@ -124,7 +124,7 @@ void EditGroupWidget::loadGroup(Group* group, bool create, const QSharedPointer<
     m_db = database;
 
     m_temporaryGroup.reset(group->clone(Entry::CloneNoFlags, Group::CloneNoFlags));
-    connect(m_temporaryGroup->customData(), SIGNAL(customDataModified()), SLOT(setModified()));
+    connect(m_temporaryGroup->customData(), &CustomData::modified, this, [this]() { setModified(true); });
 
     if (create) {
         setHeadline(tr("Add group"));
@@ -153,7 +153,7 @@ void EditGroupWidget::loadGroup(Group* group, bool create, const QSharedPointer<
     }
     m_mainUi->autoTypeSequenceCustomEdit->setText(group->effectiveAutoTypeSequence());
 
-    if (config()->get("GUI/MonospaceNotes", false).toBool()) {
+    if (config()->get(Config::GUI_MonospaceNotes).toBool()) {
         m_mainUi->editNotes->setFont(Font::fixedFont());
     } else {
         m_mainUi->editNotes->setFont(Font::defaultFont());
@@ -236,7 +236,7 @@ void EditGroupWidget::apply()
 
 void EditGroupWidget::cancel()
 {
-    if (!m_group->iconUuid().isNull() && !m_db->metadata()->containsCustomIcon(m_group->iconUuid())) {
+    if (!m_group->iconUuid().isNull() && !m_db->metadata()->hasCustomIcon(m_group->iconUuid())) {
         m_group->setIcon(Entry::DefaultIconNumber);
     }
 
@@ -250,8 +250,8 @@ void EditGroupWidget::cancel()
             return;
         }
         if (result == MessageBox::Save) {
-            apply();
-            setModified(false);
+            save();
+            return;
         }
     }
 

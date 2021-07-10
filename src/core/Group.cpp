@@ -17,6 +17,7 @@
  */
 
 #include "Group.h"
+#include "config-keepassx.h"
 
 #include "core/Clock.h"
 #include "core/Config.h"
@@ -25,16 +26,15 @@
 #include "core/Metadata.h"
 #include "core/Tools.h"
 
+#ifdef WITH_XC_KEESHARE
+#include "keeshare/KeeShare.h"
+#endif
+
 #include <QtConcurrent>
 
 const int Group::DefaultIconNumber = 48;
 const int Group::RecycleBinIconNumber = 43;
 const QString Group::RootAutoTypeSequence = "{USERNAME}{TAB}{PASSWORD}{ENTER}";
-
-Group::CloneFlags Group::DefaultCloneFlags =
-    static_cast<Group::CloneFlags>(Group::CloneNewUuid | Group::CloneResetTimeInfo | Group::CloneIncludeEntries);
-Entry::CloneFlags Group::DefaultEntryCloneFlags =
-    static_cast<Entry::CloneFlags>(Entry::CloneNewUuid | Entry::CloneResetTimeInfo);
 
 Group::Group()
     : m_customData(new CustomData(this))
@@ -46,8 +46,9 @@ Group::Group()
     m_data.searchingEnabled = Inherit;
     m_data.mergeMode = Default;
 
-    connect(m_customData, SIGNAL(customDataModified()), this, SIGNAL(groupModified()));
-    connect(this, SIGNAL(groupModified()), SLOT(updateTimeinfo()));
+    connect(m_customData, &CustomData::modified, this, &Group::modified);
+    connect(this, &Group::modified, this, &Group::updateTimeinfo);
+    connect(this, &Group::groupNonDataChange, this, &Group::updateTimeinfo);
 }
 
 Group::~Group()
@@ -79,7 +80,7 @@ template <class P, class V> inline bool Group::set(P& property, const V& value)
 {
     if (property != value) {
         property = value;
-        emit groupModified();
+        emitModified();
         return true;
     } else {
         return false;
@@ -127,10 +128,9 @@ QString Group::notes() const
 QImage Group::icon() const
 {
     if (m_data.customIcon.isNull()) {
-        return databaseIcons()->icon(m_data.iconNumber);
+        return databaseIcons()->icon(m_data.iconNumber).toImage();
     } else {
         Q_ASSERT(m_db);
-
         if (m_db) {
             return m_db->metadata()->customIcon(m_data.customIcon);
         } else {
@@ -139,35 +139,28 @@ QImage Group::icon() const
     }
 }
 
-QPixmap Group::iconPixmap() const
+QPixmap Group::iconPixmap(IconSize size) const
 {
+    QPixmap icon(size, size);
     if (m_data.customIcon.isNull()) {
-        return databaseIcons()->iconPixmap(m_data.iconNumber);
+        icon = databaseIcons()->icon(m_data.iconNumber, size);
     } else {
         Q_ASSERT(m_db);
-
         if (m_db) {
-            return m_db->metadata()->customIconPixmap(m_data.customIcon);
-        } else {
-            return QPixmap();
+            icon = m_db->metadata()->customIconPixmap(m_data.customIcon, size);
         }
     }
-}
 
-QPixmap Group::iconScaledPixmap() const
-{
-    if (m_data.customIcon.isNull()) {
-        // built-in icons are 16x16 so don't need to be scaled
-        return databaseIcons()->iconPixmap(m_data.iconNumber);
-    } else {
-        Q_ASSERT(m_db);
-
-        if (m_db) {
-            return m_db->metadata()->customIconScaledPixmap(m_data.customIcon);
-        } else {
-            return QPixmap();
-        }
+    if (isExpired()) {
+        icon = databaseIcons()->applyBadge(icon, DatabaseIcons::Badges::Expired);
     }
+#ifdef WITH_XC_KEESHARE
+    else if (KeeShare::isShared(this)) {
+        icon = KeeShare::indicatorBadge(this, icon);
+    }
+#endif
+
+    return icon;
 }
 
 int Group::iconNumber() const
@@ -340,7 +333,7 @@ void Group::setIcon(int iconNumber)
     if (iconNumber >= 0 && (m_data.iconNumber != iconNumber || !m_data.customIcon.isNull())) {
         m_data.iconNumber = iconNumber;
         m_data.customIcon = QUuid();
-        emit groupModified();
+        emitModified();
         emit groupDataChanged(this);
     }
 }
@@ -350,7 +343,7 @@ void Group::setIcon(const QUuid& uuid)
     if (!uuid.isNull() && m_data.customIcon != uuid) {
         m_data.customIcon = uuid;
         m_data.iconNumber = 0;
-        emit groupModified();
+        emitModified();
         emit groupDataChanged(this);
     }
 }
@@ -364,11 +357,7 @@ void Group::setExpanded(bool expanded)
 {
     if (m_data.isExpanded != expanded) {
         m_data.isExpanded = expanded;
-        if (config()->get("IgnoreGroupExpansion").toBool()) {
-            updateTimeinfo();
-            return;
-        }
-        emit groupModified();
+        emit groupNonDataChange();
     }
 }
 
@@ -396,7 +385,7 @@ void Group::setExpires(bool value)
 {
     if (m_data.timeInfo.expires() != value) {
         m_data.timeInfo.setExpires(value);
-        emit groupModified();
+        emitModified();
     }
 }
 
@@ -404,7 +393,7 @@ void Group::setExpiryTime(const QDateTime& dateTime)
 {
     if (m_data.timeInfo.expiryTime() != dateTime) {
         m_data.timeInfo.setExpiryTime(dateTime);
-        emit groupModified();
+        emitModified();
     }
 }
 
@@ -451,8 +440,8 @@ void Group::setParent(Group* parent, int index)
             recCreateDelObjects();
 
             // copy custom icon to the new database
-            if (!iconUuid().isNull() && parent->m_db && m_db->metadata()->containsCustomIcon(iconUuid())
-                && !parent->m_db->metadata()->containsCustomIcon(iconUuid())) {
+            if (!iconUuid().isNull() && parent->m_db && m_db->metadata()->hasCustomIcon(iconUuid())
+                && !parent->m_db->metadata()->hasCustomIcon(iconUuid())) {
                 parent->m_db->metadata()->addCustomIcon(iconUuid(), icon());
             }
         }
@@ -476,7 +465,7 @@ void Group::setParent(Group* parent, int index)
         m_data.timeInfo.setLocationChanged(Clock::currentDateTimeUtc());
     }
 
-    emit groupModified();
+    emitModified();
 
     if (!moveWithinDatabase) {
         emit groupAdded();
@@ -938,12 +927,12 @@ void Group::addEntry(Entry* entry)
     emit entryAboutToAdd(entry);
 
     m_entries << entry;
-    connect(entry, SIGNAL(entryDataChanged(Entry*)), SIGNAL(entryDataChanged(Entry*)));
+    connect(entry, &Entry::entryDataChanged, this, &Group::entryDataChanged);
     if (m_db) {
-        connect(entry, SIGNAL(entryModified()), m_db, SLOT(markAsModified()));
+        connect(entry, &Entry::modified, m_db, &Database::markAsModified);
     }
 
-    emit groupModified();
+    emitModified();
     emit entryAdded(entry);
 }
 
@@ -960,21 +949,40 @@ void Group::removeEntry(Entry* entry)
         entry->disconnect(m_db);
     }
     m_entries.removeAll(entry);
-    emit groupModified();
+    emitModified();
     emit entryRemoved(entry);
+}
+
+void Group::moveEntryUp(Entry* entry)
+{
+    int row = m_entries.indexOf(entry);
+    if (row <= 0) {
+        return;
+    }
+
+    emit entryAboutToMoveUp(row);
+    m_entries.move(row, row - 1);
+    emit entryMovedUp();
+    emit groupNonDataChange();
+}
+
+void Group::moveEntryDown(Entry* entry)
+{
+    int row = m_entries.indexOf(entry);
+    if (row >= m_entries.size() - 1) {
+        return;
+    }
+
+    emit entryAboutToMoveDown(row);
+    m_entries.move(row, row + 1);
+    emit entryMovedDown();
+    emit groupNonDataChange();
 }
 
 void Group::connectDatabaseSignalsRecursive(Database* db)
 {
     if (m_db) {
-        disconnect(SIGNAL(groupDataChanged(Group*)), m_db);
-        disconnect(SIGNAL(groupAboutToRemove(Group*)), m_db);
-        disconnect(SIGNAL(groupRemoved()), m_db);
-        disconnect(SIGNAL(groupAboutToAdd(Group*, int)), m_db);
-        disconnect(SIGNAL(groupAdded()), m_db);
-        disconnect(SIGNAL(aboutToMove(Group*, Group*, int)), m_db);
-        disconnect(SIGNAL(groupMoved()), m_db);
-        disconnect(SIGNAL(groupModified()), m_db);
+        disconnect(m_db);
     }
 
     for (Entry* entry : asConst(m_entries)) {
@@ -982,20 +990,21 @@ void Group::connectDatabaseSignalsRecursive(Database* db)
             entry->disconnect(m_db);
         }
         if (db) {
-            connect(entry, SIGNAL(entryModified()), db, SLOT(markAsModified()));
+            connect(entry, &Entry::modified, db, &Database::markAsModified);
         }
     }
 
     if (db) {
         // clang-format off
-        connect(this, SIGNAL(groupDataChanged(Group*)), db, SIGNAL(groupDataChanged(Group*)));
-        connect(this, SIGNAL(groupAboutToRemove(Group*)), db, SIGNAL(groupAboutToRemove(Group*)));
-        connect(this, SIGNAL(groupRemoved()), db, SIGNAL(groupRemoved()));
-        connect(this, SIGNAL(groupAboutToAdd(Group*, int)), db, SIGNAL(groupAboutToAdd(Group*,int)));
-        connect(this, SIGNAL(groupAdded()), db, SIGNAL(groupAdded()));
-        connect(this, SIGNAL(aboutToMove(Group*,Group*,int)), db, SIGNAL(groupAboutToMove(Group*,Group*,int)));
-        connect(this, SIGNAL(groupMoved()), db, SIGNAL(groupMoved()));
-        connect(this, SIGNAL(groupModified()), db, SLOT(markAsModified()));
+        connect(this, &Group::groupDataChanged, db, &Database::groupDataChanged);
+        connect(this, &Group::groupAboutToRemove, db, &Database::groupAboutToRemove);
+        connect(this, &Group::groupRemoved, db, &Database::groupRemoved);
+        connect(this, &Group::groupAboutToAdd, db, &Database::groupAboutToAdd);
+        connect(this, &Group::groupAdded, db, &Database::groupAdded);
+        connect(this, &Group::aboutToMove, db, &Database::groupAboutToMove);
+        connect(this, &Group::groupMoved, db, &Database::groupMoved);
+        connect(this, &Group::groupNonDataChange, db, &Database::markNonDataChange);
+        connect(this, &Group::modified, db, &Database::markAsModified);
         // clang-format on
     }
 
@@ -1011,7 +1020,7 @@ void Group::cleanupParent()
     if (m_parent) {
         emit groupAboutToRemove(this);
         m_parent->m_children.removeAll(this);
-        emit groupModified();
+        emitModified();
         emit groupRemoved();
     }
 }
@@ -1119,7 +1128,7 @@ void Group::applyGroupIconOnCreateTo(Entry* entry)
 {
     Q_ASSERT(entry);
 
-    if (!config()->get("UseGroupIconOnEntryCreation").toBool()) {
+    if (!config()->get(Config::UseGroupIconOnEntryCreation).toBool()) {
         return;
     }
 
@@ -1180,7 +1189,7 @@ void Group::sortChildrenRecursively(bool reverse)
         child->sortChildrenRecursively(reverse);
     }
 
-    emit groupModified();
+    emitModified();
 }
 
 bool Group::GroupData::operator==(const Group::GroupData& other) const

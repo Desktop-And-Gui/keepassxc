@@ -18,43 +18,43 @@
 #ifndef KEEPASSXC_UTILS_H
 #define KEEPASSXC_UTILS_H
 
-#include "cli/TextStream.h"
-#include "core/Database.h"
-#include "keys/CompositeKey.h"
-#include "keys/FileKey.h"
-#include "keys/PasswordKey.h"
-#include <QtCore/qglobal.h>
+#include <QTextStream>
 
-#ifdef WITH_XC_YUBIKEY
-#include "keys/YkChallengeResponseKey.h"
-#include "keys/YkChallengeResponseKeyCLI.h"
-#include "keys/drivers/YubiKey.h"
-#endif
+class CompositeKey;
+class Database;
+class EntryAttributes;
+class FileKey;
+class PasswordKey;
 
 namespace Utils
 {
-    extern FILE* STDOUT;
-    extern FILE* STDERR;
-    extern FILE* STDIN;
-    extern FILE* DEVNULL;
+    extern QTextStream STDOUT;
+    extern QTextStream STDERR;
+    extern QTextStream STDIN;
+    extern QTextStream DEVNULL;
+
+    void setDefaultTextStreams();
 
     void setStdinEcho(bool enable);
-    QString getPassword(FILE* outputDescriptor = STDOUT);
-    QSharedPointer<PasswordKey> getPasswordFromStdin();
+    bool loadFileKey(const QString& path, QSharedPointer<FileKey>& fileKey);
+    QString getPassword(bool quiet = false);
+    QSharedPointer<PasswordKey> getConfirmedPassword();
     int clipText(const QString& text);
     QSharedPointer<Database> unlockDatabase(const QString& databaseFilename,
-                                            const bool isPasswordProtected = true,
+                                            bool isPasswordProtected = true,
                                             const QString& keyFilename = {},
                                             const QString& yubiKeySlot = {},
-                                            FILE* outputDescriptor = STDOUT,
-                                            FILE* errorDescriptor = STDERR);
+                                            bool quiet = false);
 
     QStringList splitCommandString(const QString& command);
 
-    namespace Test
-    {
-        void setNextPassword(const QString& password);
-    }
+    /**
+     * If `attributes` contains an attribute named `name` (case-sensitive),
+     * returns a list containing only `name`. Otherwise, returns the list of
+     * all attribute names in `attributes` matching the given name
+     * (case-insensitive).
+     */
+    QStringList findAttributes(const EntryAttributes& attributes, const QString& name);
 }; // namespace Utils
 
 #endif // KEEPASSXC_UTILS_H

@@ -19,12 +19,12 @@
 #ifndef KEEPASSX_AUTOTYPEMAC_H
 #define KEEPASSX_AUTOTYPEMAC_H
 
-#include <ApplicationServices/ApplicationServices.h>
+#include <Carbon/Carbon.h>
 #include <QtPlugin>
 #include <memory>
 
-#include "autotype/AutoTypeAction.h"
 #include "autotype/AutoTypePlatformPlugin.h"
+#include "autotype/AutoTypeAction.h"
 
 class AutoTypePlatformMac : public QObject, public AutoTypePlatformInterface
 {
@@ -38,9 +38,6 @@ public:
     QStringList windowTitles() override;
     WId activeWindow() override;
     QString activeWindowTitle() override;
-    bool registerGlobalShortcut(Qt::Key key, Qt::KeyboardModifiers modifiers) override;
-    void unregisterGlobalShortcut(Qt::Key key, Qt::KeyboardModifiers modifiers) override;
-    int platformEventFilter(void* event) override;
     bool raiseWindow(WId pid) override;
     AutoTypeExecutor* createExecutor() override;
 
@@ -48,19 +45,11 @@ public:
     bool raiseOwnWindow() override;
 
     void sendChar(const QChar& ch, bool isKeyDown);
-    void sendKey(Qt::Key key, bool isKeyDown, Qt::KeyboardModifiers modifiers = 0);
-
-signals:
-    void globalShortcutTriggered();
+    void sendKey(Qt::Key key, bool isKeyDown, Qt::KeyboardModifiers modifiers);
 
 private:
-    static void hotkeyHandler(void* userData);
-    static CGKeyCode qtToNativeKeyCode(Qt::Key key);
-    static CGEventFlags qtToNativeModifiers(Qt::KeyboardModifiers modifiers);
     static int windowLayer(CFDictionaryRef window);
     static QString windowTitle(CFDictionaryRef window);
-
-    void* m_globalMonitor;
 };
 
 class AutoTypeExecutorMac : public AutoTypeExecutor
@@ -68,12 +57,12 @@ class AutoTypeExecutorMac : public AutoTypeExecutor
 public:
     explicit AutoTypeExecutorMac(AutoTypePlatformMac* platform);
 
-    void execChar(AutoTypeChar* action) override;
-    void execKey(AutoTypeKey* action) override;
-    void execClearField(AutoTypeClearField* action) override;
+    AutoTypeAction::Result execBegin(const AutoTypeBegin* action) override;
+    AutoTypeAction::Result execType(const AutoTypeKey* action) override;
+    AutoTypeAction::Result execClearField(const AutoTypeClearField* action) override;
 
 private:
     AutoTypePlatformMac* const m_platform;
 };
 
-#endif // KEEPASSX_AUTOTYPEMAC_H
+#endif  // KEEPASSX_AUTOTYPEMAC_H

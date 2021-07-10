@@ -18,16 +18,13 @@
 #ifndef KEEPASSXC_FDOSECRETS_SERVICE_H
 #define KEEPASSXC_FDOSECRETS_SERVICE_H
 
-#include "fdosecrets/objects/DBusObject.h"
-#include "fdosecrets/objects/adaptors/ServiceAdaptor.h"
+#include "fdosecrets/dbus/DBusClient.h"
+#include "fdosecrets/dbus/DBusObject.h"
 
 #include <QHash>
 #include <QObject>
 #include <QPointer>
-#include <QScopedPointer>
 #include <QVariant>
-
-class QDBusServiceWatcher;
 
 class DatabaseTabWidget;
 class DatabaseWidget;
@@ -41,59 +38,80 @@ namespace FdoSecrets
     class Collection;
     class Item;
     class PromptBase;
-    class ServiceAdaptor;
     class Session;
 
     class Service : public DBusObject // clazy: exclude=ctor-missing-parent-argument
     {
         Q_OBJECT
+        Q_CLASSINFO("D-Bus Interface", DBUS_INTERFACE_SECRET_SERVICE_LITERAL)
+
+        explicit Service(FdoSecretsPlugin* plugin, QPointer<DatabaseTabWidget> dbTabs, QSharedPointer<DBusMgr> dbus);
+
     public:
-        explicit Service(FdoSecretsPlugin* plugin, QPointer<DatabaseTabWidget> dbTabs);
+        /**
+         * @brief Create a new instance of `Service`. Its parent is set to `null`
+         * @return pointer to newly created Service, or nullptr if error
+         * This may be caused by
+         *   - failed initialization
+         */
+        static QSharedPointer<Service>
+        Create(FdoSecretsPlugin* plugin, QPointer<DatabaseTabWidget> dbTabs, QSharedPointer<DBusMgr> dbus);
         ~Service() override;
 
-        bool initialize();
+        Q_INVOKABLE DBusResult openSession(const DBusClientPtr& client,
+                                           const QString& algorithm,
+                                           const QVariant& input,
+                                           QVariant& output,
+                                           Session*& result);
+        Q_INVOKABLE DBusResult createCollection(const QVariantMap& properties,
+                                                const QString& alias,
+                                                Collection*& collection,
+                                                PromptBase*& prompt);
+        Q_INVOKABLE DBusResult searchItems(const DBusClientPtr& client,
+                                           const StringStringMap& attributes,
+                                           QList<Item*>& unlocked,
+                                           QList<Item*>& locked) const;
 
-        DBusReturn<QVariant> openSession(const QString& algorithm, const QVariant& input, Session*& result);
-        DBusReturn<Collection*>
-        createCollection(const QVariantMap& properties, const QString& alias, PromptBase*& prompt);
-        DBusReturn<const QList<Item*>> searchItems(const StringStringMap& attributes, QList<Item*>& locked);
+        Q_INVOKABLE DBusResult unlock(const DBusClientPtr& client,
+                                      const QList<DBusObject*>& objects,
+                                      QList<DBusObject*>& unlocked,
+                                      PromptBase*& prompt);
 
-        DBusReturn<const QList<DBusObject*>> unlock(const QList<DBusObject*>& objects, PromptBase*& prompt);
+        Q_INVOKABLE DBusResult lock(const QList<DBusObject*>& objects, QList<DBusObject*>& locked, PromptBase*& prompt);
 
-        DBusReturn<const QList<DBusObject*>> lock(const QList<DBusObject*>& objects, PromptBase*& prompt);
+        Q_INVOKABLE DBusResult getSecrets(const DBusClientPtr& client,
+                                          const QList<Item*>& items,
+                                          Session* session,
+                                          ItemSecretMap& secrets) const;
 
-        DBusReturn<const QHash<Item*, SecretStruct>> getSecrets(const QList<Item*>& items, Session* session);
+        Q_INVOKABLE DBusResult readAlias(const QString& name, Collection*& collection) const;
 
-        DBusReturn<Collection*> readAlias(const QString& name);
-
-        DBusReturn<void> setAlias(const QString& name, Collection* collection);
+        Q_INVOKABLE DBusResult setAlias(const QString& name, Collection* collection);
 
         /**
          * List of collections
          * @return
          */
-        DBusReturn<const QList<Collection*>> collections() const;
+        Q_INVOKABLE DBUS_PROPERTY DBusResult collections(QList<Collection*>& collections) const;
 
     signals:
         void collectionCreated(Collection* collection);
         void collectionDeleted(Collection* collection);
         void collectionChanged(Collection* collection);
 
-        void sessionOpened(Session* sess);
-        void sessionClosed(Session* sess);
-
         /**
-         * Report error message to the GUI
-         * @param msg
+         * Finish signal for async action doUnlockDatabaseInDialog
+         * @param accepted If false, the action is canceled by the user
+         * @param dbWidget The unlocked the dbWidget if succeed
          */
-        void error(const QString& msg);
+        void doneUnlockDatabaseInDialog(bool accepted, DatabaseWidget* dbWidget);
 
     public:
         /**
          * List of sessions
          * @return
          */
-        const QList<Session*> sessions() const;
+        QList<Session*> sessions() const;
 
         FdoSecretsPlugin* plugin() const
         {
@@ -101,13 +119,17 @@ namespace FdoSecrets
         }
 
     public slots:
-        void doCloseDatabase(DatabaseWidget* dbWidget);
+        bool doCloseDatabase(DatabaseWidget* dbWidget);
         Collection* doNewDatabase();
-        void doSwitchToChangeDatabaseSettings(DatabaseWidget* dbWidget);
+        void doSwitchToDatabaseSettings(DatabaseWidget* dbWidget);
+
+        /**
+         * Async, connect to signal doneUnlockDatabaseInDialog for finish notification
+         * @param dbWidget
+         */
         void doUnlockDatabaseInDialog(DatabaseWidget* dbWidget);
 
     private slots:
-        void dbusServiceUnregistered(const QString& service);
         void ensureDefaultAlias();
 
         void onDatabaseTabOpened(DatabaseWidget* dbWidget, bool emitSignal);
@@ -119,6 +141,8 @@ namespace FdoSecrets
         void onCollectionAliasRemoved(const QString& alias);
 
     private:
+        bool initialize();
+
         /**
          * Find collection by alias name
          * @param alias
@@ -142,11 +166,8 @@ namespace FdoSecrets
         QHash<const DatabaseWidget*, Collection*> m_dbToCollection;
 
         QList<Session*> m_sessions;
-        QHash<QString, Session*> m_peerToSession;
 
-        bool m_insdieEnsureDefaultAlias;
-
-        QScopedPointer<QDBusServiceWatcher> m_serviceWatcher;
+        bool m_insideEnsureDefaultAlias;
     };
 
 } // namespace FdoSecrets

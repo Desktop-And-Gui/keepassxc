@@ -20,16 +20,17 @@
 
 #include "Command.h"
 
-#include "keys/FileKey.h"
-
 class Create : public Command
 {
 public:
     Create();
     int execute(const QStringList& arguments) override;
 
-private:
-    bool loadFileKey(const QString& path, QSharedPointer<FileKey>& fileKey);
+    static QSharedPointer<Database> initializeDatabaseFromOptions(const QSharedPointer<QCommandLineParser>& parser);
+
+    static const QCommandLineOption SetKeyFileOption;
+    static const QCommandLineOption SetPasswordOption;
+    static const QCommandLineOption DecryptionTimeOption;
 };
 
 #endif // KEEPASSXC_CREATE_H

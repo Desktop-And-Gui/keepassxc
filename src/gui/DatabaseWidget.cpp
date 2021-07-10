@@ -25,21 +25,23 @@
 #include <QFile>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QHostInfo>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QProcess>
 #include <QSplitter>
+#include <QTextEdit>
 
 #include "autotype/AutoType.h"
 #include "core/Config.h"
 #include "core/Database.h"
 #include "core/EntrySearcher.h"
-#include "core/FilePath.h"
 #include "core/FileWatcher.h"
 #include "core/Group.h"
 #include "core/Merger.h"
 #include "core/Metadata.h"
+#include "core/Resources.h"
 #include "core/Tools.h"
 #include "format/KeePass2Reader.h"
 #include "gui/Clipboard.h"
@@ -48,7 +50,9 @@
 #include "gui/DatabaseOpenWidget.h"
 #include "gui/EntryPreviewWidget.h"
 #include "gui/FileDialog.h"
+#include "gui/GuiTools.h"
 #include "gui/KeePass1OpenWidget.h"
+#include "gui/MainWindow.h"
 #include "gui/MessageBox.h"
 #include "gui/OpVaultOpenWidget.h"
 #include "gui/TotpDialog.h"
@@ -59,6 +63,7 @@
 #include "gui/entry/EntryView.h"
 #include "gui/group/EditGroupWidget.h"
 #include "gui/group/GroupView.h"
+#include "gui/reports/ReportsDialog.h"
 #include "keeshare/KeeShare.h"
 #include "touchid/TouchID.h"
 
@@ -88,13 +93,17 @@ DatabaseWidget::DatabaseWidget(QSharedPointer<Database> db, QWidget* parent)
     , m_editEntryWidget(new EditEntryWidget(this))
     , m_editGroupWidget(new EditGroupWidget(this))
     , m_historyEditEntryWidget(new EditEntryWidget(this))
+    , m_reportsDialog(new ReportsDialog(this))
     , m_databaseSettingDialog(new DatabaseSettingsDialog(this))
     , m_databaseOpenWidget(new DatabaseOpenWidget(this))
     , m_keepass1OpenWidget(new KeePass1OpenWidget(this))
     , m_opVaultOpenWidget(new OpVaultOpenWidget(this))
     , m_groupView(new GroupView(m_db.data(), m_mainSplitter))
     , m_saveAttempts(0)
+    , m_entrySearcher(new EntrySearcher(false))
 {
+    Q_ASSERT(m_db);
+
     m_messageWidget->setHidden(true);
 
     auto* mainLayout = new QVBoxLayout();
@@ -134,24 +143,19 @@ DatabaseWidget::DatabaseWidget(QSharedPointer<Database> db, QWidget* parent)
     connect(m_entryView, SIGNAL(customContextMenuRequested(QPoint)), SLOT(emitEntryContextMenuRequested(QPoint)));
 
     // Add a notification for when we are searching
-    m_searchingLabel->setText(tr("Searching..."));
+    m_searchingLabel->setObjectName("SearchBanner");
+    m_searchingLabel->setText(tr("Searching…"));
     m_searchingLabel->setAlignment(Qt::AlignCenter);
-    m_searchingLabel->setStyleSheet("color: rgb(0, 0, 0);"
-                                    "background-color: rgb(255, 253, 160);"
-                                    "border: 2px solid rgb(190, 190, 190);"
-                                    "border-radius: 4px;");
     m_searchingLabel->setVisible(false);
 
 #ifdef WITH_XC_KEESHARE
-    m_shareLabel->setText(tr("Shared group..."));
+    m_shareLabel->setObjectName("KeeShareBanner");
+    m_shareLabel->setText(tr("Shared group…"));
     m_shareLabel->setAlignment(Qt::AlignCenter);
-    m_shareLabel->setStyleSheet("color: rgb(0, 0, 0);"
-                                "background-color: rgb(255, 253, 160);"
-                                "border: 2px solid rgb(190, 190, 190);"
-                                "border-radius: 4px;");
     m_shareLabel->setVisible(false);
 #endif
 
+    m_previewView->setObjectName("previewWidget");
     m_previewView->hide();
     m_previewSplitter->addWidget(m_entryView);
     m_previewSplitter->addWidget(m_previewView);
@@ -162,6 +166,7 @@ DatabaseWidget::DatabaseWidget(QSharedPointer<Database> db, QWidget* parent)
     m_editEntryWidget->setObjectName("editEntryWidget");
     m_editGroupWidget->setObjectName("editGroupWidget");
     m_csvImportWizard->setObjectName("csvImportWizard");
+    m_reportsDialog->setObjectName("reportsDialog");
     m_databaseSettingDialog->setObjectName("databaseSettingsDialog");
     m_databaseOpenWidget->setObjectName("databaseOpenWidget");
     m_keepass1OpenWidget->setObjectName("keepass1OpenWidget");
@@ -170,6 +175,7 @@ DatabaseWidget::DatabaseWidget(QSharedPointer<Database> db, QWidget* parent)
     addChildWidget(m_mainWidget);
     addChildWidget(m_editEntryWidget);
     addChildWidget(m_editGroupWidget);
+    addChildWidget(m_reportsDialog);
     addChildWidget(m_databaseSettingDialog);
     addChildWidget(m_historyEditEntryWidget);
     addChildWidget(m_databaseOpenWidget);
@@ -184,8 +190,9 @@ DatabaseWidget::DatabaseWidget(QSharedPointer<Database> db, QWidget* parent)
     connect(m_previewView, SIGNAL(errorOccurred(QString)), SLOT(showErrorMessage(QString)));
     connect(m_previewView, SIGNAL(entryUrlActivated(Entry*)), SLOT(openUrlForEntry(Entry*)));
     connect(m_entryView, SIGNAL(viewStateChanged()), SIGNAL(entryViewStateChanged()));
-    connect(m_groupView, SIGNAL(groupSelectionChanged(Group*)), SLOT(onGroupChanged(Group*)));
-    connect(m_groupView, SIGNAL(groupSelectionChanged(Group*)), SIGNAL(groupChanged()));
+    connect(m_groupView, SIGNAL(groupSelectionChanged()), SLOT(onGroupChanged()));
+    connect(m_groupView, SIGNAL(groupSelectionChanged()), SIGNAL(groupChanged()));
+    connect(m_groupView, &GroupView::groupFocused, this, [this] { m_previewView->setGroup(currentGroup()); });
     connect(m_entryView, SIGNAL(entryActivated(Entry*,EntryModel::ModelColumn)),
         SLOT(entryActivationSignalReceived(Entry*,EntryModel::ModelColumn)));
     connect(m_entryView, SIGNAL(entrySelectionChanged(Entry*)), SLOT(onEntryChanged(Entry*)));
@@ -193,6 +200,7 @@ DatabaseWidget::DatabaseWidget(QSharedPointer<Database> db, QWidget* parent)
     connect(m_editEntryWidget, SIGNAL(historyEntryActivated(Entry*)), SLOT(switchToHistoryView(Entry*)));
     connect(m_historyEditEntryWidget, SIGNAL(editFinished(bool)), SLOT(switchBackToEntryEdit()));
     connect(m_editGroupWidget, SIGNAL(editFinished(bool)), SLOT(switchToMainView(bool)));
+    connect(m_reportsDialog, SIGNAL(editFinished(bool)), SLOT(switchToMainView(bool)));
     connect(m_databaseSettingDialog, SIGNAL(editFinished(bool)), SLOT(switchToMainView(bool)));
     connect(m_databaseOpenWidget, SIGNAL(dialogFinished(bool)), SLOT(loadDatabase(bool)));
     connect(m_keepass1OpenWidget, SIGNAL(dialogFinished(bool)), SLOT(loadDatabase(bool)));
@@ -205,15 +213,7 @@ DatabaseWidget::DatabaseWidget(QSharedPointer<Database> db, QWidget* parent)
 
     m_blockAutoSave = false;
 
-    m_EntrySearcher = new EntrySearcher(false);
-    m_searchLimitGroup = config()->get("SearchLimitGroup", false).toBool();
-
-#ifdef WITH_XC_SSHAGENT
-    if (config()->get("SSHAgent", false).toBool()) {
-        connect(this, SIGNAL(databaseLocked()), SSHAgent::instance(), SLOT(databaseModeChanged()));
-        connect(this, SIGNAL(databaseUnlocked()), SSHAgent::instance(), SLOT(databaseModeChanged()));
-    }
-#endif
+    m_searchLimitGroup = config()->get(Config::SearchLimitGroup).toBool();
 
 #ifdef WITH_XC_KEESHARE
     // We need to reregister the database to allow exports
@@ -221,7 +221,11 @@ DatabaseWidget::DatabaseWidget(QSharedPointer<Database> db, QWidget* parent)
     KeeShare::instance()->connectDatabase(m_db, {});
 #endif
 
-    switchToMainView();
+    if (m_db->isInitialized()) {
+        switchToMainView();
+    } else {
+        switchToOpenDatabase();
+    }
 }
 
 DatabaseWidget::DatabaseWidget(const QString& filePath, QWidget* parent)
@@ -231,7 +235,13 @@ DatabaseWidget::DatabaseWidget(const QString& filePath, QWidget* parent)
 
 DatabaseWidget::~DatabaseWidget()
 {
-    delete m_EntrySearcher;
+    // Trigger any Database deletion related signals manually by
+    // explicitly clearing the Database pointer, instead of leaving it to ~QSharedPointer.
+    // QSharedPointer may behave differently depending on whether it is cleared by the `clear` method
+    // or by its destructor. In the latter case, the ref counter may not be correctly maintained
+    // if a copy of the QSharedPointer is created in any slots activated by the Database destructor.
+    // More details: https://github.com/keepassxreboot/keepassxc/issues/6393.
+    m_db.clear();
 }
 
 QSharedPointer<Database> DatabaseWidget::database() const
@@ -242,15 +252,15 @@ QSharedPointer<Database> DatabaseWidget::database() const
 DatabaseWidget::Mode DatabaseWidget::currentMode() const
 {
     if (currentWidget() == nullptr) {
-        return DatabaseWidget::Mode::None;
+        return Mode::None;
     } else if (currentWidget() == m_mainWidget) {
-        return DatabaseWidget::Mode::ViewMode;
+        return Mode::ViewMode;
     } else if (currentWidget() == m_databaseOpenWidget || currentWidget() == m_keepass1OpenWidget) {
-        return DatabaseWidget::Mode::LockedMode;
+        return Mode::LockedMode;
     } else if (currentWidget() == m_csvImportWizard) {
-        return DatabaseWidget::Mode::ImportMode;
+        return Mode::ImportMode;
     } else {
-        return DatabaseWidget::Mode::EditMode;
+        return Mode::EditMode;
     }
 }
 
@@ -259,14 +269,34 @@ bool DatabaseWidget::isLocked() const
     return currentMode() == Mode::LockedMode;
 }
 
+bool DatabaseWidget::isSaving() const
+{
+    return m_db->isSaving();
+}
+
+bool DatabaseWidget::isSorted() const
+{
+    return m_entryView->isSorted();
+}
+
 bool DatabaseWidget::isSearchActive() const
 {
     return m_entryView->inSearchMode();
 }
 
+bool DatabaseWidget::isEntryViewActive() const
+{
+    return currentWidget() == m_mainWidget;
+}
+
 bool DatabaseWidget::isEntryEditActive() const
 {
     return currentWidget() == m_editEntryWidget;
+}
+
+bool DatabaseWidget::isGroupEditActive() const
+{
+    return currentWidget() == m_editGroupWidget;
 }
 
 bool DatabaseWidget::isEditWidgetModified() const
@@ -297,38 +327,6 @@ QList<int> DatabaseWidget::previewSplitterSizes() const
 void DatabaseWidget::setPreviewSplitterSizes(const QList<int>& sizes)
 {
     m_previewSplitter->setSizes(sizes);
-}
-
-/**
- * Get current state of entry view 'Hide Usernames' setting
- */
-bool DatabaseWidget::isUsernamesHidden() const
-{
-    return m_entryView->isUsernamesHidden();
-}
-
-/**
- * Set state of entry view 'Hide Usernames' setting
- */
-void DatabaseWidget::setUsernamesHidden(bool hide)
-{
-    m_entryView->setUsernamesHidden(hide);
-}
-
-/**
- * Get current state of entry view 'Hide Passwords' setting
- */
-bool DatabaseWidget::isPasswordsHidden() const
-{
-    return m_entryView->isPasswordsHidden();
-}
-
-/**
- * Set state of entry view 'Hide Passwords' setting
- */
-void DatabaseWidget::setPasswordsHidden(bool hide)
-{
-    m_entryView->setPasswordsHidden(hide);
 }
 
 /**
@@ -381,6 +379,8 @@ void DatabaseWidget::createEntry()
 
 void DatabaseWidget::replaceDatabase(QSharedPointer<Database> db)
 {
+    Q_ASSERT(!isEntryEditActive() && !isGroupEditActive());
+
     // Save off new parent UUID which will be valid when creating a new entry
     QUuid newParentUuid;
     if (m_newParent) {
@@ -394,7 +394,6 @@ void DatabaseWidget::replaceDatabase(QSharedPointer<Database> db)
     m_db = std::move(db);
     connectDatabaseSignals();
     m_groupView->changeDatabase(m_db);
-    processAutoOpen();
 
     // Restore the new parent group pointer, if not found default to the root group
     // this prevents data loss when merging a database while creating a new entry
@@ -413,6 +412,8 @@ void DatabaseWidget::replaceDatabase(QSharedPointer<Database> db)
     // Keep the instance active till the end of this function
     Q_UNUSED(oldDb);
 #endif
+
+    oldDb->releaseData();
 }
 
 void DatabaseWidget::cloneEntry()
@@ -436,6 +437,7 @@ void DatabaseWidget::showTotp()
     }
 
     auto totpDialog = new TotpDialog(this, currentEntry);
+    connect(this, &DatabaseWidget::databaseLockRequested, totpDialog, &TotpDialog::close);
     totpDialog->open();
 }
 
@@ -459,6 +461,7 @@ void DatabaseWidget::setupTotp()
 
     auto setupTotpDialog = new TotpSetupDialog(this, currentEntry);
     connect(setupTotpDialog, SIGNAL(totpUpdated()), SIGNAL(entrySelectionChanged()));
+    connect(this, &DatabaseWidget::databaseLockRequested, setupTotpDialog, &TotpSetupDialog::close);
     setupTotpDialog->open();
 }
 
@@ -478,112 +481,77 @@ void DatabaseWidget::deleteSelectedEntries()
     deleteEntries(std::move(selectedEntries));
 }
 
-void DatabaseWidget::deleteEntries(QList<Entry*> selectedEntries)
+void DatabaseWidget::deleteEntries(QList<Entry*> selectedEntries, bool confirm)
 {
     // Confirm entry removal before moving forward
     auto* recycleBin = m_db->metadata()->recycleBin();
     bool permanent = (recycleBin && recycleBin->findEntryByUuid(selectedEntries.first()->uuid()))
                      || !m_db->metadata()->recycleBinEnabled();
 
-    if (!confirmDeleteEntries(selectedEntries, permanent)) {
+    if (confirm && !GuiTools::confirmDeleteEntries(this, selectedEntries, permanent)) {
         return;
     }
 
-    // Find references to selected entries and prompt for direction if necessary
-    auto it = selectedEntries.begin();
-    while (it != selectedEntries.end()) {
-        auto references = m_db->rootGroup()->referencesRecursive(*it);
-        if (!references.isEmpty()) {
-            // Ignore references that are selected for deletion
-            for (auto* entry : selectedEntries) {
-                references.removeAll(entry);
-            }
-
-            if (!references.isEmpty()) {
-                // Prompt for reference handling
-                auto result = MessageBox::question(
-                    this,
-                    tr("Replace references to entry?"),
-                    tr("Entry \"%1\" has %2 reference(s). "
-                       "Do you want to overwrite references with values, skip this entry, or delete anyway?",
-                       "",
-                       references.size())
-                        .arg((*it)->title().toHtmlEscaped())
-                        .arg(references.size()),
-                    MessageBox::Overwrite | MessageBox::Skip | MessageBox::Delete,
-                    MessageBox::Overwrite);
-
-                if (result == MessageBox::Overwrite) {
-                    for (auto* entry : references) {
-                        entry->replaceReferencesWithValues(*it);
-                    }
-                } else if (result == MessageBox::Skip) {
-                    it = selectedEntries.erase(it);
-                    continue;
-                }
-            }
-        }
-
-        it++;
-    }
-
-    if (permanent) {
-        for (auto* entry : asConst(selectedEntries)) {
-            delete entry;
-        }
-    } else {
-        for (auto* entry : asConst(selectedEntries)) {
-            m_db->recycleEntry(entry);
-        }
-    }
+    GuiTools::deleteEntriesResolveReferences(this, selectedEntries, permanent);
 
     refreshSearch();
-}
 
-bool DatabaseWidget::confirmDeleteEntries(QList<Entry*> entries, bool permanent)
-{
-    if (entries.isEmpty()) {
-        return false;
-    }
-
-    if (permanent) {
-        QString prompt;
-        if (entries.size() == 1) {
-            prompt = tr("Do you really want to delete the entry \"%1\" for good?")
-                         .arg(entries.first()->title().toHtmlEscaped());
-        } else {
-            prompt = tr("Do you really want to delete %n entry(s) for good?", "", entries.size());
-        }
-
-        auto answer = MessageBox::question(this,
-                                           tr("Delete entry(s)?", "", entries.size()),
-                                           prompt,
-                                           MessageBox::Delete | MessageBox::Cancel,
-                                           MessageBox::Cancel);
-
-        return answer == MessageBox::Delete;
+    m_entryView->setFirstEntryActive();
+    auto* currentEntry = currentSelectedEntry();
+    if (currentEntry) {
+        m_previewView->setEntry(currentEntry);
     } else {
-        QString prompt;
-        if (entries.size() == 1) {
-            prompt = tr("Do you really want to move entry \"%1\" to the recycle bin?")
-                         .arg(entries.first()->title().toHtmlEscaped());
-        } else {
-            prompt = tr("Do you really want to move %n entry(s) to the recycle bin?", "", entries.size());
-        }
-
-        auto answer = MessageBox::question(this,
-                                           tr("Move entry(s) to recycle bin?", "", entries.size()),
-                                           prompt,
-                                           MessageBox::Move | MessageBox::Cancel,
-                                           MessageBox::Cancel);
-
-        return answer == MessageBox::Move;
+        m_previewView->setGroup(groupView()->currentGroup());
     }
 }
 
-void DatabaseWidget::setFocus()
+void DatabaseWidget::setFocus(Qt::FocusReason reason)
 {
-    m_entryView->setFocus();
+    if (reason == Qt::BacktabFocusReason) {
+        m_previewView->setFocus();
+    } else {
+        m_groupView->setFocus();
+    }
+}
+
+void DatabaseWidget::focusOnEntries(bool editIfFocused)
+{
+    if (isEntryViewActive()) {
+        if (editIfFocused && m_entryView->hasFocus()) {
+            switchToEntryEdit();
+        } else {
+            m_entryView->setFocus();
+        }
+    }
+}
+
+void DatabaseWidget::focusOnGroups(bool editIfFocused)
+{
+    if (isEntryViewActive()) {
+        if (editIfFocused && m_groupView->hasFocus()) {
+            switchToGroupEdit();
+        } else {
+            m_groupView->setFocus();
+        }
+    }
+}
+
+void DatabaseWidget::moveEntryUp()
+{
+    auto currentEntry = currentSelectedEntry();
+    if (currentEntry) {
+        currentEntry->moveUp();
+        m_entryView->setCurrentEntry(currentEntry);
+    }
+}
+
+void DatabaseWidget::moveEntryDown()
+{
+    auto currentEntry = currentSelectedEntry();
+    if (currentEntry) {
+        currentEntry->moveDown();
+        m_entryView->setCurrentEntry(currentEntry);
+    }
 }
 
 void DatabaseWidget::copyTitle()
@@ -604,6 +572,14 @@ void DatabaseWidget::copyUsername()
 
 void DatabaseWidget::copyPassword()
 {
+    // QTextEdit does not properly trap Ctrl+C copy shortcut
+    // if a text edit has focus pass the copy operation to it
+    auto textEdit = qobject_cast<QTextEdit*>(focusWidget());
+    if (textEdit) {
+        textEdit->copy();
+        return;
+    }
+
     auto currentEntry = currentSelectedEntry();
     if (currentEntry) {
         setClipboardTextAndMinimize(currentEntry->resolveMultiplePlaceholders(currentEntry->password()));
@@ -640,6 +616,7 @@ void DatabaseWidget::showTotpKeyQrCode()
     auto currentEntry = currentSelectedEntry();
     if (currentEntry) {
         auto totpDisplayDialog = new TotpExportSettingsDialog(this, currentEntry);
+        connect(this, &DatabaseWidget::databaseLockRequested, totpDisplayDialog, &TotpExportSettingsDialog::close);
         totpDisplayDialog->open();
     }
 }
@@ -647,21 +624,97 @@ void DatabaseWidget::showTotpKeyQrCode()
 void DatabaseWidget::setClipboardTextAndMinimize(const QString& text)
 {
     clipboard()->setText(text);
-    if (config()->get("HideWindowOnCopy").toBool()) {
-        if (config()->get("MinimizeOnCopy").toBool()) {
-            window()->showMinimized();
-        } else if (config()->get("DropToBackgroundOnCopy").toBool()) {
+    if (config()->get(Config::HideWindowOnCopy).toBool()) {
+        if (config()->get(Config::MinimizeOnCopy).toBool()) {
+            getMainWindow()->minimizeOrHide();
+        } else if (config()->get(Config::DropToBackgroundOnCopy).toBool()) {
             window()->lower();
         }
     }
 }
 
-void DatabaseWidget::performAutoType()
+#ifdef WITH_XC_SSHAGENT
+void DatabaseWidget::addToAgent()
+{
+    Entry* currentEntry = m_entryView->currentEntry();
+    Q_ASSERT(currentEntry);
+    if (!currentEntry) {
+        return;
+    }
+
+    KeeAgentSettings settings;
+    if (!settings.fromEntry(currentEntry)) {
+        return;
+    }
+
+    OpenSSHKey key;
+    if (settings.toOpenSSHKey(currentEntry, key, true)) {
+        SSHAgent::instance()->addIdentity(key, settings, database()->uuid());
+    } else {
+        m_messageWidget->showMessage(key.errorString(), MessageWidget::Error);
+    }
+}
+
+void DatabaseWidget::removeFromAgent()
+{
+    Entry* currentEntry = m_entryView->currentEntry();
+    Q_ASSERT(currentEntry);
+    if (!currentEntry) {
+        return;
+    }
+
+    KeeAgentSettings settings;
+    if (!settings.fromEntry(currentEntry)) {
+        return;
+    }
+
+    OpenSSHKey key;
+    if (settings.toOpenSSHKey(currentEntry, key, false)) {
+        SSHAgent::instance()->removeIdentity(key);
+    } else {
+        m_messageWidget->showMessage(key.errorString(), MessageWidget::Error);
+    }
+}
+#endif
+
+void DatabaseWidget::performAutoType(const QString& sequence)
 {
     auto currentEntry = currentSelectedEntry();
     if (currentEntry) {
-        autoType()->performAutoType(currentEntry, window());
+        // TODO: Include name of previously active window in confirmation question
+        if (config()->get(Config::Security_AutoTypeAsk).toBool()
+            && MessageBox::question(
+                   this, tr("Confirm Auto-Type"), tr("Perform Auto-Type into the previously active window?"))
+                   != MessageBox::Yes) {
+            return;
+        }
+
+        if (sequence.isEmpty()) {
+            autoType()->performAutoType(currentEntry, window());
+        } else {
+            autoType()->performAutoTypeWithSequence(currentEntry, sequence, window());
+        }
     }
+}
+
+void DatabaseWidget::performAutoTypeUsername()
+{
+    performAutoType(QStringLiteral("{USERNAME}"));
+}
+
+void DatabaseWidget::performAutoTypeUsernameEnter()
+{
+    performAutoType(QStringLiteral("{USERNAME}{ENTER}"));
+}
+
+void DatabaseWidget::performAutoTypePassword()
+{
+    performAutoType(QStringLiteral("{PASSWORD}"));
+}
+
+void DatabaseWidget::performAutoTypePasswordEnter()
+{
+    performAutoType(QStringLiteral("{PASSWORD}{ENTER}"));
 }
 
 void DatabaseWidget::openUrl()
@@ -721,7 +774,8 @@ void DatabaseWidget::openUrlForEntry(Entry* entry)
 
         // otherwise ask user
         if (!launch && cmdString.length() > 6) {
-            QString cmdTruncated = cmdString.mid(6);
+            QString cmdTruncated = entry->resolveMultiplePlaceholders(entry->maskPasswordPlaceholders(entry->url()));
+            cmdTruncated = cmdTruncated.mid(6);
             if (cmdTruncated.length() > 400) {
                 cmdTruncated = cmdTruncated.left(400) + " […]";
             }
@@ -753,17 +807,19 @@ void DatabaseWidget::openUrlForEntry(Entry* entry)
         if (launch) {
             QProcess::startDetached(cmdString.mid(6));
 
-            if (config()->get("MinimizeOnOpenUrl").toBool()) {
-                window()->showMinimized();
+            if (config()->get(Config::MinimizeOnOpenUrl).toBool()) {
+                getMainWindow()->minimizeOrHide();
             }
         }
+    } else if (cmdString.startsWith("kdbx://")) {
+        openDatabaseFromEntry(entry, false);
     } else {
         QUrl url = QUrl::fromUserInput(entry->resolveMultiplePlaceholders(entry->url()));
         if (!url.isEmpty()) {
             QDesktopServices::openUrl(url);
 
-            if (config()->get("MinimizeOnOpenUrl").toBool()) {
-                window()->showMinimized();
+            if (config()->get(Config::MinimizeOnOpenUrl).toBool()) {
+                getMainWindow()->minimizeOrHide();
             }
         }
     }
@@ -838,6 +894,8 @@ int DatabaseWidget::addChildWidget(QWidget* w)
 
 void DatabaseWidget::switchToMainView(bool previousDialogAccepted)
 {
+    setCurrentWidget(m_mainWidget);
+
     if (m_newGroup) {
         if (previousDialogAccepted) {
             m_newGroup->setParent(m_newParent);
@@ -863,12 +921,10 @@ void DatabaseWidget::switchToMainView(bool previousDialogAccepted)
         m_entryView->setFocus();
     }
 
-    setCurrentWidget(m_mainWidget);
-
     if (sender() == m_entryView || sender() == m_editEntryWidget) {
         onEntryChanged(m_entryView->currentEntry());
     } else if (sender() == m_groupView || sender() == m_editGroupWidget) {
-        onGroupChanged(m_groupView->currentGroup());
+        onGroupChanged();
     }
 }
 
@@ -923,10 +979,10 @@ void DatabaseWidget::connectDatabaseSignals()
             SIGNAL(filePathChanged(QString, QString)),
 
             SIGNAL(databaseFilePathChanged(QString, QString)));
-    connect(m_db.data(), SIGNAL(databaseModified()), SIGNAL(databaseModified()));
-    connect(m_db.data(), SIGNAL(databaseModified()), SLOT(onDatabaseModified()));
-    connect(m_db.data(), SIGNAL(databaseSaved()), SIGNAL(databaseSaved()));
-    connect(m_db.data(), SIGNAL(databaseFileChanged()), this, SLOT(reloadDatabaseFile()));
+    connect(m_db.data(), &Database::modified, this, &DatabaseWidget::databaseModified);
+    connect(m_db.data(), &Database::modified, this, &DatabaseWidget::onDatabaseModified);
+    connect(m_db.data(), &Database::databaseSaved, this, &DatabaseWidget::databaseSaved);
+    connect(m_db.data(), &Database::databaseFileChanged, this, &DatabaseWidget::reloadDatabaseFile);
 }
 
 void DatabaseWidget::loadDatabase(bool accepted)
@@ -940,10 +996,17 @@ void DatabaseWidget::loadDatabase(bool accepted)
     if (accepted) {
         replaceDatabase(openWidget->database());
         switchToMainView();
+        processAutoOpen();
+        restoreGroupEntryFocus(m_groupBeforeLock, m_entryBeforeLock);
+        m_groupBeforeLock = QUuid();
+        m_entryBeforeLock = QUuid();
         m_saveAttempts = 0;
         emit databaseUnlocked();
-        if (config()->get("MinimizeAfterUnlock").toBool()) {
-            window()->showMinimized();
+#ifdef WITH_XC_SSHAGENT
+        sshAgent()->databaseUnlocked(m_db);
+#endif
+        if (config()->get(Config::MinimizeAfterUnlock).toBool()) {
+            getMainWindow()->minimizeOrHide();
         }
     } else {
         if (m_databaseOpenWidget->database()) {
@@ -1026,7 +1089,16 @@ void DatabaseWidget::unlockDatabase(bool accepted)
     m_entryBeforeLock = QUuid();
 
     switchToMainView();
+    processAutoOpen();
     emit databaseUnlocked();
+
+#ifdef WITH_XC_SSHAGENT
+    sshAgent()->databaseUnlocked(m_db);
+#endif
+
+    if (config()->get(Config::MinimizeAfterUnlock).toBool()) {
+        getMainWindow()->minimizeOrHide();
+    }
 
     if (senderDialog && senderDialog->intent() == DatabaseOpenDialog::Intent::AutoType) {
         QList<QSharedPointer<Database>> dbList;
@@ -1045,10 +1117,18 @@ void DatabaseWidget::entryActivationSignalReceived(Entry* entry, EntryModel::Mod
     // Implement 'copy-on-doubleclick' functionality for certain columns
     switch (column) {
     case EntryModel::Username:
-        setClipboardTextAndMinimize(entry->resolveMultiplePlaceholders(entry->username()));
+        if (config()->get(Config::Security_EnableCopyOnDoubleClick).toBool()) {
+            setClipboardTextAndMinimize(entry->resolveMultiplePlaceholders(entry->username()));
+        } else {
+            switchToEntryEdit(entry);
+        }
         break;
     case EntryModel::Password:
-        setClipboardTextAndMinimize(entry->resolveMultiplePlaceholders(entry->password()));
+        if (config()->get(Config::Security_EnableCopyOnDoubleClick).toBool()) {
+            setClipboardTextAndMinimize(entry->resolveMultiplePlaceholders(entry->password()));
+        } else {
+            switchToEntryEdit(entry);
+        }
         break;
     case EntryModel::Url:
         if (!entry->url().isEmpty()) {
@@ -1080,6 +1160,12 @@ void DatabaseWidget::entryActivationSignalReceived(Entry* entry, EntryModel::Mod
     }
 }
 
+void DatabaseWidget::switchToDatabaseReports()
+{
+    m_reportsDialog->load(m_db);
+    setCurrentWidget(m_reportsDialog);
+}
+
 void DatabaseWidget::switchToDatabaseSettings()
 {
     m_databaseSettingDialog->load(m_db);
@@ -1088,7 +1174,9 @@ void DatabaseWidget::switchToDatabaseSettings()
 
 void DatabaseWidget::switchToOpenDatabase()
 {
-    switchToOpenDatabase(m_db->filePath());
+    if (currentWidget() != m_databaseOpenWidget || m_databaseOpenWidget->filename() != m_db->filePath()) {
+        switchToOpenDatabase(m_db->filePath());
+    }
 }
 
 void DatabaseWidget::switchToOpenDatabase(const QString& filePath)
@@ -1160,10 +1248,10 @@ void DatabaseWidget::sortGroupsDesc()
     m_groupView->sortGroups(true);
 }
 
-void DatabaseWidget::switchToMasterKeyChange()
+void DatabaseWidget::switchToDatabaseSecurity()
 {
     switchToDatabaseSettings();
-    m_databaseSettingDialog->showMasterKeySettings();
+    m_databaseSettingDialog->showDatabaseKeySettings();
 }
 
 void DatabaseWidget::performUnlockDatabase(const QString& password, const QString& keyfile)
@@ -1196,7 +1284,7 @@ void DatabaseWidget::search(const QString& searchtext)
 
     Group* searchGroup = m_searchLimitGroup ? currentGroup() : m_db->rootGroup();
 
-    QList<Entry*> searchResult = m_EntrySearcher->search(searchtext, searchGroup);
+    QList<Entry*> searchResult = m_entrySearcher->search(searchtext, searchGroup);
 
     m_entryView->displaySearch(searchResult);
     m_lastSearchText = searchtext;
@@ -1218,7 +1306,7 @@ void DatabaseWidget::search(const QString& searchtext)
 
 void DatabaseWidget::setSearchCaseSensitive(bool state)
 {
-    m_EntrySearcher->setCaseSensitive(state);
+    m_entrySearcher->setCaseSensitive(state);
     refreshSearch();
 }
 
@@ -1228,14 +1316,15 @@ void DatabaseWidget::setSearchLimitGroup(bool state)
     refreshSearch();
 }
 
-void DatabaseWidget::onGroupChanged(Group* group)
+void DatabaseWidget::onGroupChanged()
 {
+    auto group = m_groupView->currentGroup();
+
     // Intercept group changes if in search mode
     if (isSearchActive() && m_searchLimitGroup) {
         search(m_lastSearchText);
-    } else if (isSearchActive()) {
-        endSearch();
     } else {
+        endSearch();
         m_entryView->displayGroup(group);
     }
 
@@ -1254,7 +1343,7 @@ void DatabaseWidget::onGroupChanged(Group* group)
 
 void DatabaseWidget::onDatabaseModified()
 {
-    if (!m_blockAutoSave && config()->get("AutoSaveAfterEveryChange").toBool() && !m_db->isReadOnly()) {
+    if (!m_blockAutoSave && config()->get(Config::AutoSaveAfterEveryChange).toBool() && !m_db->isReadOnly()) {
         save();
     } else {
         // Only block once, then reset
@@ -1270,17 +1359,17 @@ QString DatabaseWidget::getCurrentSearch()
 void DatabaseWidget::endSearch()
 {
     if (isSearchActive()) {
-        emit listModeAboutToActivate();
-
         // Show the normal entry view of the current group
+        emit listModeAboutToActivate();
         m_entryView->displayGroup(currentGroup());
-        onGroupChanged(currentGroup());
-
         emit listModeActivated();
+        m_entryView->setFirstEntryActive();
+        // Enforce preview view update (prevents stale information if focus group is empty)
+        m_previewView->setEntry(currentSelectedEntry());
     }
 
     m_searchingLabel->setVisible(false);
-    m_searchingLabel->setText(tr("Searching..."));
+    m_searchingLabel->setText(tr("Searching…"));
 
     m_lastSearchText.clear();
 
@@ -1337,13 +1426,49 @@ void DatabaseWidget::showEvent(QShowEvent* event)
     event->accept();
 }
 
+bool DatabaseWidget::focusNextPrevChild(bool next)
+{
+    // [parent] <-> GroupView <-> EntryView <-> EntryPreview <-> [parent]
+    if (next) {
+        if (m_groupView->hasFocus()) {
+            m_entryView->setFocus();
+            return true;
+        } else if (m_entryView->hasFocus()) {
+            m_previewView->setFocus();
+            return true;
+        }
+    } else {
+        if (m_previewView->hasFocus()) {
+            m_entryView->setFocus();
+            return true;
+        } else if (m_entryView->hasFocus()) {
+            m_groupView->setFocus();
+            return true;
+        }
+    }
+
+    // Defer to the parent widget to make a decision
+    return QStackedWidget::focusNextPrevChild(next);
+}
+
 bool DatabaseWidget::lock()
 {
     if (isLocked()) {
         return true;
     }
 
+    // Don't try to lock the database while saving, this will cause a deadlock
+    if (m_db->isSaving()) {
+        QTimer::singleShot(200, this, SLOT(lock()));
+        return false;
+    }
+
     emit databaseLockRequested();
+
+    // ignore event if we are active and a modal dialog is still open (such as a message box or file dialog)
+    if (isVisible() && QApplication::activeModalWidget()) {
+        return false;
+    }
 
     clipboard()->clearCopiedText();
 
@@ -1361,7 +1486,8 @@ bool DatabaseWidget::lock()
     if (m_db->isModified()) {
         bool saved = false;
         // Attempt to save on exit, but don't block locking if it fails
-        if (config()->get("AutoSaveOnExit").toBool()) {
+        if (config()->get(Config::AutoSaveOnExit).toBool()
+            || config()->get(Config::AutoSaveAfterEveryChange).toBool()) {
             saved = save();
         }
 
@@ -1385,6 +1511,10 @@ bool DatabaseWidget::lock()
                 return false;
             }
         }
+    } else if (m_db->hasNonDataChanges() && config()->get(Config::AutoSaveNonDataChanges).toBool()) {
+        // Silently auto-save non-data changes, ignore errors
+        QString errorMessage;
+        performSave(errorMessage);
     }
 
     if (m_groupView->currentGroup()) {
@@ -1397,6 +1527,10 @@ bool DatabaseWidget::lock()
     if (currentEntry) {
         m_entryBeforeLock = currentEntry->uuid();
     }
+
+#ifdef WITH_XC_SSHAGENT
+    sshAgent()->databaseLocked(m_db);
+#endif
 
     endSearch();
     clearAllWidgets();
@@ -1412,13 +1546,14 @@ bool DatabaseWidget::lock()
 
 void DatabaseWidget::reloadDatabaseFile()
 {
-    if (!m_db || isLocked()) {
+    // Ignore reload if we are locked or currently editing an entry or group
+    if (!m_db || isLocked() || isEntryEditActive() || isGroupEditActive()) {
         return;
     }
 
     m_blockAutoSave = true;
 
-    if (!config()->get("AutoReloadOnChange").toBool()) {
+    if (!config()->get(Config::AutoReloadOnChange).toBool()) {
         // Ask if we want to reload the db
         auto result = MessageBox::question(this,
                                            tr("File has changed"),
@@ -1432,10 +1567,15 @@ void DatabaseWidget::reloadDatabaseFile()
         }
     }
 
+    // Lock out interactions
+    m_entryView->setDisabled(true);
+    m_groupView->setDisabled(true);
+    QApplication::processEvents();
+
     QString error;
     auto db = QSharedPointer<Database>::create(m_db->filePath());
     if (db->open(database()->key(), &error)) {
-        if (m_db->isModified()) {
+        if (m_db->isModified() || db->hasNonDataChanges()) {
             // Ask if we want to merge changes into new database
             auto result = MessageBox::question(
                 this,
@@ -1462,6 +1602,7 @@ void DatabaseWidget::reloadDatabaseFile()
         }
 
         replaceDatabase(db);
+        processAutoOpen();
         restoreGroupEntryFocus(groupBeforeReload, entryBeforeReload);
         m_blockAutoSave = false;
     } else {
@@ -1470,11 +1611,20 @@ void DatabaseWidget::reloadDatabaseFile()
         // Mark db as modified since existing data may differ from file or file was deleted
         m_db->markAsModified();
     }
+
+    // Return control
+    m_entryView->setDisabled(false);
+    m_groupView->setDisabled(false);
 }
 
 int DatabaseWidget::numberOfSelectedEntries() const
 {
     return m_entryView->numberOfSelectedEntries();
+}
+
+int DatabaseWidget::currentEntryIndex() const
+{
+    return m_entryView->currentEntryIndex();
 }
 
 QStringList DatabaseWidget::customEntryAttributes() const
@@ -1505,11 +1655,6 @@ void DatabaseWidget::restoreGroupEntryFocus(const QUuid& groupUuid, const QUuid&
 bool DatabaseWidget::isGroupSelected() const
 {
     return m_groupView->currentGroup();
-}
-
-bool DatabaseWidget::currentEntryHasFocus()
-{
-    return m_entryView->numberOfSelectedEntries() > 0 && m_entryView->hasFocus();
 }
 
 bool DatabaseWidget::currentEntryHasTitle()
@@ -1562,6 +1707,19 @@ bool DatabaseWidget::currentEntryHasTotp()
     return currentEntry->hasTotp();
 }
 
+#ifdef WITH_XC_SSHAGENT
+bool DatabaseWidget::currentEntryHasSshKey()
+{
+    Entry* currentEntry = m_entryView->currentEntry();
+    Q_ASSERT(currentEntry);
+    if (!currentEntry) {
+        return false;
+    }
+
+    return KeeAgentSettings::inEntryAttachments(currentEntry->attachments());
+}
+#endif
+
 bool DatabaseWidget::currentEntryHasNotes()
 {
     auto currentEntry = currentSelectedEntry();
@@ -1610,18 +1768,14 @@ bool DatabaseWidget::save()
     m_blockAutoSave = true;
     ++m_saveAttempts;
 
-    // TODO: Make this async, but lock out the database widget to prevent re-entrance
-    bool useAtomicSaves = config()->get("UseAtomicSaves", true).toBool();
     QString errorMessage;
-    bool ok = m_db->save(&errorMessage, useAtomicSaves, config()->get("BackupBeforeSave").toBool());
-
-    if (ok) {
+    if (performSave(errorMessage)) {
         m_saveAttempts = 0;
         m_blockAutoSave = false;
         return true;
     }
 
-    if (m_saveAttempts > 2 && useAtomicSaves) {
+    if (m_saveAttempts > 2 && config()->get(Config::UseAtomicSaves).toBool()) {
         // Saving failed 3 times, issue a warning and attempt to resolve
         auto result = MessageBox::question(this,
                                            tr("Disable safe saves?"),
@@ -1631,7 +1785,7 @@ bool DatabaseWidget::save()
                                            MessageBox::Disable | MessageBox::Cancel,
                                            MessageBox::Disable);
         if (result == MessageBox::Disable) {
-            config()->set("UseAtomicSaves", false);
+            config()->set(Config::UseAtomicSaves, false);
             return save();
         }
     }
@@ -1651,14 +1805,87 @@ bool DatabaseWidget::save()
  */
 bool DatabaseWidget::saveAs()
 {
+    // Never allow saving a locked database; it causes corruption
+    Q_ASSERT(!isLocked());
+    // Release build interlock
+    if (isLocked()) {
+        // We return true since a save is not required
+        return true;
+    }
+
+    QString oldFilePath = m_db->filePath();
+    if (!QFileInfo::exists(oldFilePath)) {
+        oldFilePath =
+            QDir::toNativeSeparators(config()->get(Config::LastDir).toString() + "/" + tr("Passwords").append(".kdbx"));
+    }
+    const QString newFilePath = fileDialog()->getSaveFileName(
+        this, tr("Save database as"), oldFilePath, tr("KeePass 2 Database").append(" (*.kdbx)"), nullptr, nullptr);
+
+    bool ok = false;
+    if (!newFilePath.isEmpty()) {
+        QString errorMessage;
+        if (!performSave(errorMessage, newFilePath)) {
+            showMessage(tr("Writing the database failed: %1").arg(errorMessage),
+                        MessageWidget::Error,
+                        true,
+                        MessageWidget::LongAutoHideTimeout);
+        }
+    }
+
+    return ok;
+}
+
+bool DatabaseWidget::performSave(QString& errorMessage, const QString& fileName)
+{
+    QPointer<QWidget> focusWidget(qApp->focusWidget());
+
+    // Lock out interactions
+    m_entryView->setDisabled(true);
+    m_groupView->setDisabled(true);
+    QApplication::processEvents();
+
+    bool ok;
+    if (fileName.isEmpty()) {
+        ok = m_db->save(&errorMessage,
+                        config()->get(Config::UseAtomicSaves).toBool(),
+                        config()->get(Config::BackupBeforeSave).toBool());
+    } else {
+        ok = m_db->saveAs(fileName,
+                          &errorMessage,
+                          config()->get(Config::UseAtomicSaves).toBool(),
+                          config()->get(Config::BackupBeforeSave).toBool());
+    }
+
+    // Return control
+    m_entryView->setDisabled(false);
+    m_groupView->setDisabled(false);
+
+    if (focusWidget) {
+        focusWidget->setFocus();
+    }
+
+    return ok;
+}
+
+/**
+ * Save copy of database under a new user-selected filename.
+ *
+ * @return true on success
+ */
+bool DatabaseWidget::saveBackup()
+{
     while (true) {
         QString oldFilePath = m_db->filePath();
         if (!QFileInfo::exists(oldFilePath)) {
-            oldFilePath = QDir::toNativeSeparators(config()->get("LastDir", QDir::homePath()).toString() + "/"
+            oldFilePath = QDir::toNativeSeparators(config()->get(Config::LastDir).toString() + "/"
                                                    + tr("Passwords").append(".kdbx"));
         }
-        const QString newFilePath = fileDialog()->getSaveFileName(
-            this, tr("Save database as"), oldFilePath, tr("KeePass 2 Database").append(" (*.kdbx)"), nullptr, nullptr);
+        const QString newFilePath = fileDialog()->getSaveFileName(this,
+                                                                  tr("Save database backup"),
+                                                                  oldFilePath,
+                                                                  tr("KeePass 2 Database").append(" (*.kdbx)"),
+                                                                  nullptr,
+                                                                  nullptr);
 
         if (!newFilePath.isEmpty()) {
             // Ensure we don't recurse back into this function
@@ -1666,11 +1893,19 @@ bool DatabaseWidget::saveAs()
             m_db->setFilePath(newFilePath);
             m_saveAttempts = 0;
 
+            bool modified = m_db->isModified();
+
             if (!save()) {
                 // Failed to save, try again
+                m_db->setFilePath(oldFilePath);
                 continue;
             }
 
+            m_db->setFilePath(oldFilePath);
+            if (modified) {
+                // Source database is marked as clean when copy is saved, even if source has unsaved changes
+                m_db->markAsModified();
+            }
             return true;
         }
 
@@ -1734,41 +1969,82 @@ void DatabaseWidget::processAutoOpen()
     }
 
     for (const auto* entry : autoopenGroup->entries()) {
-        if (entry->url().isEmpty() || entry->password().isEmpty()) {
-            continue;
-        }
-        QFileInfo filepath;
-        QFileInfo keyfile;
-
-        if (entry->url().startsWith("file://")) {
-            QUrl url(entry->url());
-            filepath.setFile(url.toLocalFile());
-        } else {
-            filepath.setFile(entry->url());
-            if (filepath.isRelative()) {
-                QFileInfo currentpath(m_db->filePath());
-                filepath.setFile(currentpath.absoluteDir(), entry->url());
-            }
-        }
-
-        if (!filepath.isFile()) {
+        if (entry->url().isEmpty() || (entry->password().isEmpty() && entry->username().isEmpty())) {
             continue;
         }
 
-        if (!entry->username().isEmpty()) {
-            if (entry->username().startsWith("file://")) {
-                QUrl keyfileUrl(entry->username());
-                keyfile.setFile(keyfileUrl.toLocalFile());
-            } else {
-                keyfile.setFile(entry->username());
-                if (keyfile.isRelative()) {
-                    QFileInfo currentpath(m_db->filePath());
-                    keyfile.setFile(currentpath.absoluteDir(), entry->username());
+        // Support ifDevice advanced entry, a comma separated list of computer names
+        // that control whether to perform AutoOpen on this entry or not. Can be
+        // negated using '!'
+        auto ifDevice = entry->attribute("IfDevice");
+        if (!ifDevice.isEmpty()) {
+            bool loadDb = false;
+            auto hostName = QHostInfo::localHostName();
+            for (auto& device : ifDevice.split(",")) {
+                device = device.trimmed();
+                if (device.startsWith("!")) {
+                    if (device.mid(1).compare(hostName, Qt::CaseInsensitive) == 0) {
+                        // Machine name matched an exclusion, don't load this database
+                        loadDb = false;
+                        break;
+                    } else {
+                        // Not matching an exclusion allows loading on all machines
+                        loadDb = true;
+                    }
+                } else if (device.compare(hostName, Qt::CaseInsensitive) == 0) {
+                    // Explicitly named for loading
+                    loadDb = true;
                 }
             }
+            if (!loadDb) {
+                continue;
+            }
         }
 
-        // Request to open the database file in the background with a password and keyfile
-        emit requestOpenDatabase(filepath.canonicalFilePath(), true, entry->password(), keyfile.canonicalFilePath());
+        openDatabaseFromEntry(entry);
     }
+}
+
+void DatabaseWidget::openDatabaseFromEntry(const Entry* entry, bool inBackground)
+{
+    auto keyFile = entry->resolveMultiplePlaceholders(entry->username());
+    auto password = entry->resolveMultiplePlaceholders(entry->password());
+    auto databaseUrl = entry->resolveMultiplePlaceholders(entry->url());
+    if (databaseUrl.startsWith("kdbx://")) {
+        databaseUrl = databaseUrl.mid(7);
+    }
+
+    QFileInfo dbFileInfo;
+    if (databaseUrl.startsWith("file://")) {
+        QUrl url(databaseUrl);
+        dbFileInfo.setFile(url.toLocalFile());
+    } else {
+        dbFileInfo.setFile(databaseUrl);
+        if (dbFileInfo.isRelative()) {
+            QFileInfo currentpath(m_db->filePath());
+            dbFileInfo.setFile(currentpath.absoluteDir(), databaseUrl);
+        }
+    }
+
+    if (!dbFileInfo.isFile()) {
+        showErrorMessage(tr("Could not find database file: %1").arg(databaseUrl));
+        return;
+    }
+
+    QFileInfo keyFileInfo;
+    if (!keyFile.isEmpty()) {
+        if (keyFile.startsWith("file://")) {
+            QUrl keyfileUrl(keyFile);
+            keyFileInfo.setFile(keyfileUrl.toLocalFile());
+        } else {
+            keyFileInfo.setFile(keyFile);
+            if (keyFileInfo.isRelative()) {
+                QFileInfo currentpath(m_db->filePath());
+                keyFileInfo.setFile(currentpath.absoluteDir(), keyFile);
+            }
+        }
+    }
+
+    // Request to open the database file in the background with a password and keyfile
+    emit requestOpenDatabase(dbFileInfo.canonicalFilePath(), inBackground, password, keyFileInfo.canonicalFilePath());
 }

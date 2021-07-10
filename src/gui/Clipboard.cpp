@@ -39,25 +39,31 @@ Clipboard::Clipboard(QObject* parent)
         m_pasteboard = new MacPasteboard();
     }
 #endif
-    m_timer->setSingleShot(true);
-    connect(m_timer, SIGNAL(timeout()), SLOT(clearClipboard()));
+    connect(m_timer, SIGNAL(timeout()), SLOT(countdownTick()));
     connect(qApp, SIGNAL(aboutToQuit()), SLOT(clearCopiedText()));
 }
 
-void Clipboard::setText(const QString& text)
+void Clipboard::setText(const QString& text, bool clear)
 {
-    QClipboard* clipboard = QApplication::clipboard();
+    auto* clipboard = QApplication::clipboard();
+    if (!clipboard) {
+        qWarning("Unable to access the clipboard.");
+        return;
+    }
 
-    QMimeData* mime = new QMimeData;
+    auto* mime = new QMimeData;
 #ifdef Q_OS_MACOS
     mime->setText(text);
     mime->setData("application/x-nspasteboard-concealed-type", text.toUtf8());
     clipboard->setMimeData(mime, QClipboard::Clipboard);
 #else
-    const QString secretStr = "secret";
-    QByteArray secretBa = secretStr.toUtf8();
     mime->setText(text);
-    mime->setData("x-kde-passwordManagerHint", secretBa);
+#ifdef Q_OS_LINUX
+    mime->setData("x-kde-passwordManagerHint", QByteArrayLiteral("secret"));
+#endif
+#ifdef Q_OS_WIN
+    mime->setData("ExcludeClipboardContentFromMonitorProcessing", QByteArrayLiteral("1"));
+#endif
     clipboard->setMimeData(mime, QClipboard::Clipboard);
 
     if (clipboard->supportsSelection()) {
@@ -65,41 +71,49 @@ void Clipboard::setText(const QString& text)
     }
 #endif
 
-    if (config()->get("security/clearclipboard").toBool()) {
-        int timeout = config()->get("security/clearclipboardtimeout").toInt();
-        if (timeout > 0) {
-            m_lastCopied = text;
-            m_timer->start(timeout * 1000);
+    if (clear) {
+        m_lastCopied = text;
+        if (config()->get(Config::Security_ClearClipboard).toBool()) {
+            int timeout = config()->get(Config::Security_ClearClipboardTimeout).toInt();
+            if (timeout > 0) {
+                m_secondsElapsed = -1;
+                countdownTick();
+                m_timer->start(1000);
+            }
         }
     }
 }
 
 void Clipboard::clearCopiedText()
 {
-    if (m_timer->isActive()) {
-        m_timer->stop();
-        clearClipboard();
-    }
-}
+    m_timer->stop();
+    emit updateCountdown(-1, "");
 
-void Clipboard::clearClipboard()
-{
-    QClipboard* clipboard = QApplication::clipboard();
-
+    auto* clipboard = QApplication::clipboard();
     if (!clipboard) {
         qWarning("Unable to access the clipboard.");
         return;
     }
 
-    if (clipboard->text(QClipboard::Clipboard) == m_lastCopied) {
-        clipboard->clear(QClipboard::Clipboard);
-    }
-
-    if (clipboard->supportsSelection() && (clipboard->text(QClipboard::Selection) == m_lastCopied)) {
-        clipboard->clear(QClipboard::Selection);
+    if (m_lastCopied == clipboard->text(QClipboard::Clipboard)
+        || m_lastCopied == clipboard->text(QClipboard::Selection)) {
+        setText("", false);
     }
 
     m_lastCopied.clear();
+}
+
+void Clipboard::countdownTick()
+{
+    m_secondsElapsed++;
+    int timeout = config()->get(Config::Security_ClearClipboardTimeout).toInt();
+    int timeLeft = timeout - m_secondsElapsed;
+    if (timeLeft <= 0) {
+        clearCopiedText();
+    } else {
+        emit updateCountdown(100 * timeLeft / timeout,
+                             QObject::tr("Clearing the clipboard in %1 second(s)…", "", timeLeft).arg(timeLeft));
+    }
 }
 
 Clipboard* Clipboard::instance()

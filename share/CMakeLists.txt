@@ -19,124 +19,80 @@ add_subdirectory(translations)
 file(GLOB wordlists_files "wordlists/*.wordlist")
 install(FILES ${wordlists_files} DESTINATION ${DATA_INSTALL_DIR}/wordlists)
 
-file(GLOB DATABASE_ICONS icons/database/*.png)
-
-install(FILES ${DATABASE_ICONS} DESTINATION ${DATA_INSTALL_DIR}/icons/database)
+# Copy wordlists to build dir for use in tests
+file(COPY "wordlists" DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
 if(UNIX AND NOT APPLE AND NOT HAIKU)
-    install(DIRECTORY icons/application/ DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor
-            FILES_MATCHING PATTERN "keepassx*.png" PATTERN "keepassx*.svg"
-            PATTERN "status" EXCLUDE PATTERN "actions" EXCLUDE PATTERN "categories" EXCLUDE)
-    install(DIRECTORY icons/application/ DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor
-            FILES_MATCHING PATTERN "application-x-keepassxc.png" PATTERN "application-x-keepassxc.svg"
-            PATTERN "status" EXCLUDE PATTERN "actions" EXCLUDE PATTERN "categories" EXCLUDE)
-    install(FILES linux/org.keepassxc.KeePassXC.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-    install(FILES linux/org.keepassxc.KeePassXC.appdata.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
-    install(FILES linux/keepassxc.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages)
+    # Flatpak requires all host accessible files to use filenames based upon the app id
+    if(KEEPASSXC_DIST_FLATPAK)
+        set(APP_ICON_NAME "${APP_ID}")
+        set(MIME_ICON "${APP_ID}-application-x-keepassxc")
+        configure_file(linux/keepassxc.xml.in ${CMAKE_CURRENT_BINARY_DIR}/linux/${APP_ID}.xml @ONLY)
+        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/linux/${APP_ID}.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages)
+
+        file(GLOB_RECURSE ICON_FILES LIST_DIRECTORIES false
+             "icons/application/*/keepassxc*.png"
+             "icons/application/*/*keepassxc*.svg")
+        foreach(icon_match ${ICON_FILES})
+            get_filename_component(icon_name ${icon_match} NAME)
+            get_filename_component(icon_dir ${icon_match} DIRECTORY)
+            # Prefix all icons with application id: "org.keepassxc.KeePassXC"
+            string(REGEX REPLACE "^keepassxc(.*)?(\\.png|\\.svg)$" "${APP_ID}\\1\\2" icon_name ${icon_name})
+            string(REGEX REPLACE "^(application-x-keepassxc\\.svg)$" "${APP_ID}-\\1" icon_name ${icon_name})
+            # Find icon sub dir ex. "scalable/mimetypes/"
+            file(RELATIVE_PATH icon_subdir ${CMAKE_CURRENT_SOURCE_DIR}/icons/application ${icon_dir})
+            install(FILES ${icon_match} DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${icon_subdir}
+                    RENAME ${icon_name})
+        endforeach()
+    else()
+        set(APP_ICON_NAME "keepassxc")
+        set(MIME_ICON "application-x-keepassxc")
+        configure_file(linux/keepassxc.xml.in ${CMAKE_CURRENT_BINARY_DIR}/linux/keepassxc.xml @ONLY)
+        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/linux/keepassxc.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages)
+
+        install(DIRECTORY icons/application/ DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor
+                FILES_MATCHING PATTERN "keepassx*.png" PATTERN "keepassx*.svg"
+                PATTERN "status" EXCLUDE PATTERN "actions" EXCLUDE PATTERN "categories" EXCLUDE)
+        install(DIRECTORY icons/application/ DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor
+                FILES_MATCHING PATTERN "application-x-keepassxc.svg" PATTERN "status"
+                EXCLUDE PATTERN "actions" EXCLUDE PATTERN "categories" EXCLUDE)
+    endif(KEEPASSXC_DIST_FLATPAK)
+    configure_file(linux/${APP_ID}.desktop.in ${CMAKE_CURRENT_BINARY_DIR}/linux/${APP_ID}.desktop @ONLY)
+    configure_file(linux/${APP_ID}.policy.in ${CMAKE_CURRENT_BINARY_DIR}/linux/${APP_ID}.policy @ONLY)
+
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/linux/${APP_ID}.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    if("${CMAKE_SYSTEM}" MATCHES "Linux")
+      install(FILES ${CMAKE_CURRENT_BINARY_DIR}/linux/${APP_ID}.policy DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions)
+    endif()
+    install(FILES linux/${APP_ID}.appdata.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
 endif(UNIX AND NOT APPLE AND NOT HAIKU)
 
+install(FILES icons/application/256x256/apps/keepassxc.png DESTINATION ${DATA_INSTALL_DIR}/icons/application/256x256/apps)
+
+add_custom_target(icons)
+add_custom_command(TARGET icons
+        POST_BUILD
+        COMMAND bash ./icons/minify.sh
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 if(APPLE)
-  install(FILES macosx/keepassxc.icns DESTINATION ${DATA_INSTALL_DIR})
+    add_custom_command(TARGET icons
+            POST_BUILD
+            COMMAND xcrun actool share/macosx/keepassxc.icon
+                --compile share/macosx
+                --output-partial-info-plist /dev/null
+                --app-icon keepassxc
+                --include-all-app-icons
+                --enable-on-demand-resources NO
+                --target-device mac
+                --minimum-deployment-target 11.0
+                --platform macosx
+                --output-format human-readable-text
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
-install(DIRECTORY docs/ DESTINATION ${DATA_INSTALL_DIR}/docs FILES_MATCHING PATTERN "*.pdf")
-
-install(DIRECTORY wizard/ DESTINATION ${DATA_INSTALL_DIR}/wizard FILES_MATCHING PATTERN "*.png")
-
-install(DIRECTORY icons/application/ DESTINATION ${DATA_INSTALL_DIR}/icons/application
-        FILES_MATCHING PATTERN "*.png" PATTERN "*.svg")
-
-add_custom_target(icons
-    # SVG to PNGs for KeePassXC
-    COMMAND inkscape -z -w 16 -h 16
-        icons/application/scalable/apps/keepassxc.svg -e icons/application/16x16/apps/keepassxc.png
-    COMMAND inkscape -z -w  24 -h 24
-        icons/application/scalable/apps/keepassxc.svg -e icons/application/24x24/apps/keepassxc.png
-    COMMAND inkscape -z -w  32 -h 32
-        icons/application/scalable/apps/keepassxc.svg -e icons/application/32x32/apps/keepassxc.png
-    COMMAND inkscape -z -w 48 -h 48
-        icons/application/scalable/apps/keepassxc.svg -e icons/application/48x48/apps/keepassxc.png
-    COMMAND inkscape -z -w 64 -h 64
-        icons/application/scalable/apps/keepassxc.svg -e icons/application/64x64/apps/keepassxc.png
-    COMMAND inkscape -z -w 128 -h 128
-        icons/application/scalable/apps/keepassxc.svg -e icons/application/128x128/apps/keepassxc.png
-    COMMAND inkscape -z -w 256 -h 256
-        icons/application/scalable/apps/keepassxc.svg -e icons/application/256x256/apps/keepassxc.png
-
-    # SVG to PNGs for KeePassXC
-    COMMAND inkscape -z -w 16 -h 16
-        icons/application/scalable/apps/keepassxc-dark.svg -e icons/application/16x16/apps/keepassxc-dark.png
-    COMMAND inkscape -z -w  24 -h 24
-        icons/application/scalable/apps/keepassxc-dark.svg -e icons/application/24x24/apps/keepassxc-dark.png
-    COMMAND inkscape -z -w  32 -h 32
-        icons/application/scalable/apps/keepassxc-dark.svg -e icons/application/32x32/apps/keepassxc-dark.png
-    COMMAND inkscape -z -w 48 -h 48
-        icons/application/scalable/apps/keepassxc-dark.svg -e icons/application/48x48/apps/keepassxc-dark.png
-    COMMAND inkscape -z -w 64 -h 64
-        icons/application/scalable/apps/keepassxc-dark.svg -e icons/application/64x64/apps/keepassxc-dark.png
-    COMMAND inkscape -z -w 128 -h 128
-        icons/application/scalable/apps/keepassxc-dark.svg -e icons/application/128x128/apps/keepassxc-dark.png
-    COMMAND inkscape -z -w 256 -h 256
-        icons/application/scalable/apps/keepassxc-dark.svg -e icons/application/256x256/apps/keepassxc-dark.png
-
-    # SVG to PNGs for KeePassXC
-    COMMAND inkscape -z -w 16 -h 16
-        icons/application/scalable/apps/keepassxc-locked.svg -e icons/application/16x16/apps/keepassxc-locked.png
-    COMMAND inkscape -z -w  24 -h 24
-        icons/application/scalable/apps/keepassxc-locked.svg -e icons/application/24x24/apps/keepassxc-locked.png
-    COMMAND inkscape -z -w  32 -h 32
-        icons/application/scalable/apps/keepassxc-locked.svg -e icons/application/32x32/apps/keepassxc-locked.png
-    COMMAND inkscape -z -w 48 -h 48
-        icons/application/scalable/apps/keepassxc-locked.svg -e icons/application/48x48/apps/keepassxc-locked.png
-    COMMAND inkscape -z -w 64 -h 64
-        icons/application/scalable/apps/keepassxc-locked.svg -e icons/application/64x64/apps/keepassxc-locked.png
-    COMMAND inkscape -z -w 128 -h 128
-        icons/application/scalable/apps/keepassxc-locked.svg -e icons/application/128x128/apps/keepassxc-locked.png
-    COMMAND inkscape -z -w 256 -h 256
-        icons/application/scalable/apps/keepassxc-locked.svg -e icons/application/256x256/apps/keepassxc-locked.png
-
-    # SVG to PNGs for KeePassXC
-    COMMAND inkscape -z -w 16 -h 16
-        icons/application/scalable/apps/keepassxc-unlocked.svg -e icons/application/16x16/apps/keepassxc-unlocked.png
-    COMMAND inkscape -z -w  24 -h 24
-        icons/application/scalable/apps/keepassxc-unlocked.svg -e icons/application/24x24/apps/keepassxc-unlocked.png
-    COMMAND inkscape -z -w  32 -h 32
-        icons/application/scalable/apps/keepassxc-unlocked.svg -e icons/application/32x32/apps/keepassxc-unlocked.png
-    COMMAND inkscape -z -w 48 -h 48
-        icons/application/scalable/apps/keepassxc-unlocked.svg -e icons/application/48x48/apps/keepassxc-unlocked.png
-    COMMAND inkscape -z -w 64 -h 64
-        icons/application/scalable/apps/keepassxc-unlocked.svg -e icons/application/64x64/apps/keepassxc-unlocked.png
-    COMMAND inkscape -z -w 128 -h 128
-        icons/application/scalable/apps/keepassxc-unlocked.svg -e icons/application/128x128/apps/keepassxc-unlocked.png
-    COMMAND inkscape -z -w 256 -h 256
-        icons/application/scalable/apps/keepassxc-unlocked.svg -e icons/application/256x256/apps/keepassxc-unlocked.png
-
-    # SVG to PNGs for KeePassXC MIME-Type
-    COMMAND inkscape -z -w 16 -h 16
-        icons/application/scalable/mimetypes/application-x-keepassxc.svg -e icons/application/16x16/mimetypes/application-x-keepassxc.png
-    COMMAND inkscape -z -w 22 -h 22
-        icons/application/scalable/mimetypes/application-x-keepassxc.svg -e icons/application/22x22/mimetypes/application-x-keepassxc.png
-    COMMAND inkscape -z -w 32 -h 32
-        icons/application/scalable/mimetypes/application-x-keepassxc.svg -e icons/application/32x32/mimetypes/application-x-keepassxc.png
-    COMMAND inkscape -z -w 64 -h 64
-        icons/application/scalable/mimetypes/application-x-keepassxc.svg -e icons/application/64x64/mimetypes/application-x-keepassxc.png
-    COMMAND inkscape -z -w 128 -h 128
-        icons/application/scalable/mimetypes/application-x-keepassxc.svg -e icons/application/128x128/mimetypes/application-x-keepassxc.png
-
-    # Shrink PNGs using pngcrush
-    COMMAND bash ./crushpng.sh icons
-
-    # ICNS for MacOS
-    COMMAND png2icns macosx/keepassxc.icns
-        icons/application/16x16/apps/keepassxc.png
-        icons/application/32x32/apps/keepassxc.png
-        icons/application/48x48/apps/keepassxc.png
-        icons/application/128x128/apps/keepassxc.png
-        icons/application/256x256/apps/keepassxc.png
-
-    # ICO for Windows
+# ICO for Windows
+add_custom_command(TARGET icons
+    POST_BUILD
     COMMAND bash ./windows/create-ico.sh icons/application/scalable/apps/keepassxc.svg windows/keepassxc.ico
     COMMAND bash ./windows/create-ico.sh icons/application/scalable/mimetypes/application-x-keepassxc.svg windows/keepassxc-kdbx.ico
-
-    VERBATIM
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

@@ -18,12 +18,8 @@
 #include "EditGroupWidgetKeeShare.h"
 #include "ui_EditGroupWidgetKeeShare.h"
 
-#include "core/Config.h"
-#include "core/CustomData.h"
-#include "core/FilePath.h"
+#include "KeeShareSettings.h"
 #include "core/Group.h"
-#include "core/Metadata.h"
-#include "crypto/ssh/OpenSSHKey.h"
 #include "gui/FileDialog.h"
 #include "keeshare/KeeShare.h"
 
@@ -36,27 +32,21 @@ EditGroupWidgetKeeShare::EditGroupWidgetKeeShare(QWidget* parent)
 {
     m_ui->setupUi(this);
 
-    m_ui->togglePasswordButton->setIcon(filePath()->onOffIcon("actions", "password-show"));
-    m_ui->togglePasswordGeneratorButton->setIcon(filePath()->icon("actions", "password-generator", false));
-
-    m_ui->passwordGenerator->layout()->setContentsMargins(0, 0, 0, 0);
-    m_ui->passwordGenerator->hide();
-    m_ui->passwordGenerator->reset();
-
     m_ui->messageWidget->hide();
     m_ui->messageWidget->setCloseButtonVisible(false);
     m_ui->messageWidget->setAutoHideTimeout(-1);
+    m_ui->messageWidget->setAnimate(false);
 
-    connect(m_ui->togglePasswordButton, SIGNAL(toggled(bool)), m_ui->passwordEdit, SLOT(setShowPassword(bool)));
-    connect(m_ui->togglePasswordGeneratorButton, SIGNAL(toggled(bool)), SLOT(togglePasswordGeneratorButton(bool)));
+    m_ui->passwordEdit->enablePasswordGenerator();
+
     connect(m_ui->passwordEdit, SIGNAL(textChanged(QString)), SLOT(selectPassword()));
-    connect(m_ui->passwordGenerator, SIGNAL(appliedPassword(QString)), SLOT(setGeneratedPassword(QString)));
     connect(m_ui->pathEdit, SIGNAL(editingFinished()), SLOT(selectPath()));
     connect(m_ui->pathSelectionButton, SIGNAL(pressed()), SLOT(launchPathSelectionDialog()));
     connect(m_ui->typeComboBox, SIGNAL(currentIndexChanged(int)), SLOT(selectType()));
+    connect(m_ui->keepGroupsCheckbox, SIGNAL(toggled(bool)), SLOT(keepGroupsToggled(bool)));
     connect(m_ui->clearButton, SIGNAL(clicked(bool)), SLOT(clearInputs()));
 
-    connect(KeeShare::instance(), SIGNAL(activeChanged()), SLOT(showSharingState()));
+    connect(KeeShare::instance(), SIGNAL(activeChanged()), SLOT(updateSharingState()));
 
     const auto types = QList<KeeShareSettings::Type>()
                        << KeeShareSettings::Inactive << KeeShareSettings::ImportFrom << KeeShareSettings::ExportTo
@@ -95,25 +85,30 @@ void EditGroupWidgetKeeShare::setGroup(Group* temporaryGroup, QSharedPointer<Dat
     m_temporaryGroup = temporaryGroup;
 
     if (m_temporaryGroup) {
-        connect(m_temporaryGroup, SIGNAL(groupModified()), SLOT(update()));
+        connect(m_temporaryGroup, &Group::modified, this, &EditGroupWidgetKeeShare::update);
     }
 
     update();
 }
 
-void EditGroupWidgetKeeShare::showSharingState()
+void EditGroupWidgetKeeShare::updateSharingState()
 {
-    if (!m_temporaryGroup) {
+    // Only enable controls if we are active
+    bool isEnabled = m_ui->typeComboBox->currentData().toInt() > KeeShareSettings::Inactive;
+    m_ui->pathEdit->setEnabled(isEnabled);
+    m_ui->pathSelectionButton->setEnabled(isEnabled);
+    m_ui->passwordEdit->setEnabled(isEnabled);
+    m_ui->keepGroupsCheckbox->setEnabled(isEnabled);
+
+    if (!m_temporaryGroup || !isEnabled) {
+        m_ui->messageWidget->hideMessage();
         return;
     }
 
-    auto supportedExtensions = QStringList();
-#if defined(WITH_XC_KEESHARE_INSECURE)
-    supportedExtensions << KeeShare::unsignedContainerFileType();
-#endif
-#if defined(WITH_XC_KEESHARE_SECURE)
-    supportedExtensions << KeeShare::signedContainerFileType();
-#endif
+    QStringList supportedExtensions;
+    supportedExtensions << KeeShare::unsignedContainerFileType() << KeeShare::signedContainerFileType();
+
+    // Custom message for active KeeShare reference
     const auto reference = KeeShare::referenceOf(m_temporaryGroup);
     if (!reference.path.isEmpty()) {
         bool supported = false;
@@ -164,26 +159,23 @@ void EditGroupWidgetKeeShare::showSharingState()
                 MessageWidget::Warning);
             return;
         }
-
-        m_ui->messageWidget->hide();
     }
+
+    // Standard message for state of KeeShare service
     const auto active = KeeShare::active();
     if (!active.in && !active.out) {
         m_ui->messageWidget->showMessage(
             tr("KeeShare is currently disabled. You can enable import/export in the application settings.",
                "KeeShare is a proper noun"),
             MessageWidget::Information);
-        return;
-    }
-    if (active.in && !active.out) {
+    } else if (active.in && !active.out) {
         m_ui->messageWidget->showMessage(tr("Database export is currently disabled by application settings."),
                                          MessageWidget::Information);
-        return;
-    }
-    if (!active.in && active.out) {
+    } else if (!active.in && active.out) {
         m_ui->messageWidget->showMessage(tr("Database import is currently disabled by application settings."),
                                          MessageWidget::Information);
-        return;
+    } else {
+        m_ui->messageWidget->hideMessage();
     }
 }
 
@@ -198,13 +190,10 @@ void EditGroupWidgetKeeShare::update()
         m_ui->typeComboBox->setCurrentIndex(reference.type);
         m_ui->passwordEdit->setText(reference.password);
         m_ui->pathEdit->setText(reference.path);
-
-        showSharingState();
+        m_ui->keepGroupsCheckbox->setChecked(reference.keepGroups);
     }
 
-    m_ui->passwordGenerator->hide();
-    m_ui->togglePasswordGeneratorButton->setChecked(false);
-    m_ui->togglePasswordButton->setChecked(false);
+    updateSharingState();
 }
 
 void EditGroupWidgetKeeShare::clearInputs()
@@ -215,24 +204,7 @@ void EditGroupWidgetKeeShare::clearInputs()
     m_ui->passwordEdit->clear();
     m_ui->pathEdit->clear();
     m_ui->typeComboBox->setCurrentIndex(KeeShareSettings::Inactive);
-    m_ui->passwordGenerator->setVisible(false);
-}
-
-void EditGroupWidgetKeeShare::togglePasswordGeneratorButton(bool checked)
-{
-    m_ui->passwordGenerator->regeneratePassword();
-    m_ui->passwordGenerator->setVisible(checked);
-}
-
-void EditGroupWidgetKeeShare::setGeneratedPassword(const QString& password)
-{
-    if (!m_temporaryGroup) {
-        return;
-    }
-    auto reference = KeeShare::referenceOf(m_temporaryGroup);
-    reference.password = password;
-    KeeShare::setReferenceTo(m_temporaryGroup, reference);
-    m_ui->togglePasswordGeneratorButton->setChecked(false);
+    updateSharingState();
 }
 
 void EditGroupWidgetKeeShare::selectPath()
@@ -250,51 +222,33 @@ void EditGroupWidgetKeeShare::launchPathSelectionDialog()
     if (!m_temporaryGroup) {
         return;
     }
-    QString defaultDirPath = config()->get("KeeShare/LastShareDir").toString();
-    const bool dirExists = !defaultDirPath.isEmpty() && QDir(defaultDirPath).exists();
-    if (!dirExists) {
-        defaultDirPath = QStandardPaths::standardLocations(QStandardPaths::DocumentsLocation).first();
-    }
     auto reference = KeeShare::referenceOf(m_temporaryGroup);
-    QString defaultFiletype = "";
-    auto supportedExtensions = QStringList();
-    auto unsupportedExtensions = QStringList();
-    auto knownFilters = QStringList() << QString("%1 (*)").arg("All files");
-#if defined(WITH_XC_KEESHARE_INSECURE)
-    defaultFiletype = KeeShare::unsignedContainerFileType();
-    supportedExtensions << KeeShare::unsignedContainerFileType();
-    knownFilters.prepend(
-        QString("%1 (*.%2)").arg(tr("KeeShare unsigned container"), KeeShare::unsignedContainerFileType()));
-#else
-    unsupportedExtensions << KeeShare::unsignedContainerFileType();
-#endif
-#if defined(WITH_XC_KEESHARE_SECURE)
-    defaultFiletype = KeeShare::signedContainerFileType();
-    supportedExtensions << KeeShare::signedContainerFileType();
-    knownFilters.prepend(
-        QString("%1 (*.%2)").arg(tr("KeeShare signed container"), KeeShare::signedContainerFileType()));
-#else
-    unsupportedExtensions << KeeShare::signedContainerFileType();
-#endif
+    QString defaultFiletype = KeeShare::unsignedContainerFileType();
+
+    QStringList supportedExtensions;
+    supportedExtensions << KeeShare::unsignedContainerFileType() << KeeShare::signedContainerFileType();
+
+    QStringList knownFilters;
+    knownFilters << QString("%1 (*.%2)").arg(tr("KeeShare container"), KeeShare::unsignedContainerFileType());
+    knownFilters << QString("%1 (*.%2)").arg(tr("KeeShare signed container"), KeeShare::signedContainerFileType());
+    knownFilters << QString("%1 (*)").arg("All files");
 
     const auto filters = knownFilters.join(";;");
+    auto defaultDirPath = FileDialog::getLastDir("keeshare");
     auto filename = reference.path;
     if (filename.isEmpty()) {
         filename = m_temporaryGroup->name();
     }
     switch (reference.type) {
     case KeeShareSettings::ImportFrom:
-        filename = fileDialog()->getFileName(
-            this, tr("Select import source"), defaultDirPath, filters, nullptr, QFileDialog::DontConfirmOverwrite);
+        filename = fileDialog()->getOpenFileName(this, tr("Select import source"), defaultDirPath, filters);
         break;
     case KeeShareSettings::ExportTo:
-        filename = fileDialog()->getFileName(
-            this, tr("Select export target"), defaultDirPath, filters, nullptr, QFileDialog::Option(0));
+        filename = fileDialog()->getSaveFileName(this, tr("Select export target"), defaultDirPath, filters);
         break;
     case KeeShareSettings::SynchronizeWith:
     case KeeShareSettings::Inactive:
-        filename = fileDialog()->getFileName(
-            this, tr("Select import/export file"), defaultDirPath, filters, nullptr, QFileDialog::Option(0));
+        filename = fileDialog()->getSaveFileName(this, tr("Select import/export file"), defaultDirPath, filters);
         break;
     }
 
@@ -302,7 +256,7 @@ void EditGroupWidgetKeeShare::launchPathSelectionDialog()
         return;
     }
     bool validFilename = false;
-    for (const auto& extension : supportedExtensions + unsupportedExtensions) {
+    for (const auto& extension : supportedExtensions) {
         if (filename.endsWith(extension, Qt::CaseInsensitive)) {
             validFilename = true;
             break;
@@ -314,7 +268,9 @@ void EditGroupWidgetKeeShare::launchPathSelectionDialog()
 
     m_ui->pathEdit->setText(filename);
     selectPath();
-    config()->set("KeeShare/LastShareDir", QFileInfo(filename).absolutePath());
+    FileDialog::saveLastDir("keeshare", filename);
+
+    updateSharingState();
 }
 
 void EditGroupWidgetKeeShare::selectPassword()
@@ -334,5 +290,17 @@ void EditGroupWidgetKeeShare::selectType()
     }
     auto reference = KeeShare::referenceOf(m_temporaryGroup);
     reference.type = static_cast<KeeShareSettings::Type>(m_ui->typeComboBox->currentData().toInt());
+    KeeShare::setReferenceTo(m_temporaryGroup, reference);
+
+    updateSharingState();
+}
+
+void EditGroupWidgetKeeShare::keepGroupsToggled(bool toggled)
+{
+    if (!m_temporaryGroup) {
+        return;
+    }
+    auto reference = KeeShare::referenceOf(m_temporaryGroup);
+    reference.keepGroups = toggled;
     KeeShare::setReferenceTo(m_temporaryGroup, reference);
 }

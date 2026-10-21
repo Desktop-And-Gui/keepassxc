@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ * Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,17 +20,17 @@
 
 #include "core/Database.h"
 #include "core/Metadata.h"
-#include "core/TimeInfo.h"
 
 #include <QCoreApplication>
-#include <QPair>
-#include <QString>
+#include <QMultiHash>
+#include <QStringView>
 #include <QXmlStreamReader>
 
 class QIODevice;
 class Group;
 class Entry;
 class KeePass2RandomStream;
+class TimeInfo;
 
 /**
  * KDBX XML payload reader.
@@ -83,7 +83,7 @@ protected:
     virtual QString readString(bool& isProtected, bool& protectInMemory);
     virtual bool readBool();
     virtual QDateTime readDateTime();
-    virtual QColor readColor();
+    virtual QString readColor();
     virtual int readNumber();
     virtual QUuid readUuid();
     virtual QByteArray readBinary();
@@ -94,7 +94,7 @@ protected:
     virtual Group* getGroup(const QUuid& uuid);
     virtual Entry* getEntry(const QUuid& uuid);
 
-    virtual bool isTrueValue(const QStringRef& value);
+    virtual bool isTrueValue(const QStringView value);
     virtual void raiseError(const QString& errorMessage);
 
     const quint32 m_kdbxVersion;
@@ -111,7 +111,7 @@ protected:
     QHash<QUuid, Entry*> m_entries;
 
     QHash<QString, QByteArray> m_binaryPool;
-    QHash<QString, QPair<Entry*, QString>> m_binaryMap;
+    QMultiHash<QString, QPair<Entry*, QString>> m_binaryMap;
     QByteArray m_headerHash;
 
     bool m_error = false;

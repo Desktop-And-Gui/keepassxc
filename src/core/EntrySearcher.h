@@ -20,7 +20,6 @@
 #define KEEPASSX_ENTRYSEARCHER_H
 
 #include <QRegularExpression>
-#include <QString>
 
 class Group;
 class Entry;
@@ -28,18 +27,6 @@ class Entry;
 class EntrySearcher
 {
 public:
-    explicit EntrySearcher(bool caseSensitive = false);
-
-    QList<Entry*> search(const QString& searchString, const Group* baseGroup, bool forceSearch = false);
-    QList<Entry*> repeat(const Group* baseGroup, bool forceSearch = false);
-
-    QList<Entry*> searchEntries(const QString& searchString, const QList<Entry*>& entries);
-    QList<Entry*> repeatEntries(const QList<Entry*>& entries);
-
-    void setCaseSensitive(bool state);
-    bool isCaseSensitive();
-
-private:
     enum class Field
     {
         Undefined,
@@ -48,25 +35,45 @@ private:
         Password,
         Url,
         Notes,
-        AttributeKey,
+        AttributeKV,
         Attachment,
-        AttributeValue
+        AttributeValue,
+        Group,
+        Tag,
+        Is,
+        Has,
+        Uuid
     };
 
     struct SearchTerm
     {
         Field field;
+        // only used when field == Field::AttributeValue
         QString word;
         QRegularExpression regex;
         bool exclude;
     };
 
-    bool searchEntryImpl(Entry* entry);
+    explicit EntrySearcher(bool caseSensitive = false, bool skipProtected = false);
+
+    QList<Entry*> search(const QList<SearchTerm>& searchTerms, const Group* baseGroup, bool forceSearch = false);
+    QList<Entry*> search(const QString& searchString, const Group* baseGroup, bool forceSearch = false);
+    QList<Entry*> repeat(const Group* baseGroup, bool forceSearch = false);
+
+    QList<Entry*> searchEntries(const QList<SearchTerm>& searchTerms, const QList<Entry*>& entries);
+    QList<Entry*> searchEntries(const QString& searchString, const QList<Entry*>& entries);
+    QList<Entry*> repeatEntries(const QList<Entry*>& entries);
+
+    void setCaseSensitive(bool state);
+    bool isCaseSensitive() const;
+
+private:
+    bool searchEntryImpl(const Entry* entry);
     void parseSearchTerms(const QString& searchString);
 
     bool m_caseSensitive;
-    QRegularExpression m_termParser;
-    QList<QSharedPointer<SearchTerm>> m_searchTerms;
+    bool m_skipProtected;
+    QList<SearchTerm> m_searchTerms;
 
     friend class TestEntrySearcher;
 };

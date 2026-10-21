@@ -16,14 +16,12 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef BROWSERENTRYSAVEDIALOG_H
-#define BROWSERENTRYSAVEDIALOG_H
+#ifndef KEEPASSXC_BROWSERENTRYSAVEDIALOG_H
+#define KEEPASSXC_BROWSERENTRYSAVEDIALOG_H
 
 #include "gui/DatabaseTabWidget.h"
 
-#include <QDialog>
-#include <QListWidgetItem>
-#include <QScopedPointer>
+class QListWidgetItem;
 
 class Entry;
 
@@ -43,8 +41,11 @@ public:
     int setItems(QList<DatabaseWidget*>& databaseWidgets, DatabaseWidget* currentWidget) const;
     QList<QListWidgetItem*> getSelected() const;
 
+protected:
+    void showEvent(QShowEvent* event) override;
+
 private:
     QScopedPointer<Ui::BrowserEntrySaveDialog> m_ui;
 };
 
-#endif // BROWSERENTRYSAVEDIALOG_H
+#endif // KEEPASSXC_BROWSERENTRYSAVEDIALOG_H

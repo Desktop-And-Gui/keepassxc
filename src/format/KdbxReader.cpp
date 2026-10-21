@@ -1,4 +1,3 @@
-#include <utility>
 
 /*
  * Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
@@ -20,13 +19,15 @@
 #include "KdbxReader.h"
 #include "core/Database.h"
 #include "core/Endian.h"
-
-#include <QBuffer>
+#include "crypto/SymmetricCipher.h"
+#include "streams/StoreDataStream.h"
 
 #define UUID_LENGTH 16
 
 /**
  * Read KDBX magic header numbers from a device.
+ *
+ * Passing a null key will only read in the unprotected headers.
  *
  * @param device input device
  * @param sig1 KDBX signature 1
@@ -56,6 +57,8 @@ bool KdbxReader::readMagicNumbers(QIODevice* device, quint32& sig1, quint32& sig
  * Read KDBX stream from device.
  * The device will automatically be reset to 0 before reading.
  *
+ * Passing a null key will only read in the unprotected headers.
+ *
  * @param device input device
  * @param key database encryption composite key
  * @param db database to read into
@@ -75,14 +78,12 @@ bool KdbxReader::readDatabase(QIODevice* device, QSharedPointer<const CompositeK
     headerStream.open(QIODevice::ReadOnly);
 
     // read KDBX magic numbers
-    quint32 sig1, sig2;
-    if (!readMagicNumbers(&headerStream, sig1, sig2, m_kdbxVersion)) {
+    quint32 sig1, sig2, version;
+    if (!readMagicNumbers(&headerStream, sig1, sig2, version)) {
         return false;
     }
     m_kdbxSignature = qMakePair(sig1, sig2);
-
-    // mask out minor version
-    m_kdbxVersion &= KeePass2::FILE_VERSION_CRITICAL_MASK;
+    m_db->setFormatVersion(version);
 
     // read header fields
     while (readHeaderField(headerStream, m_db) && !hasError()) {
@@ -92,6 +93,11 @@ bool KdbxReader::readDatabase(QIODevice* device, QSharedPointer<const CompositeK
 
     if (hasError()) {
         return false;
+    }
+
+    // No key provided - don't proceed to load payload
+    if (key.isNull()) {
+        return true;
     }
 
     // read payload
@@ -129,7 +135,7 @@ void KdbxReader::setCipher(const QByteArray& data)
         return;
     }
 
-    if (SymmetricCipher::cipherToAlgorithm(uuid) == SymmetricCipher::InvalidAlgorithm) {
+    if (SymmetricCipher::cipherUuidToMode(uuid) == SymmetricCipher::InvalidMode) {
         raiseError(tr("Unsupported cipher"));
         return;
     }

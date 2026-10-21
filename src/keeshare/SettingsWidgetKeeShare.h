@@ -19,7 +19,6 @@
 #define KEEPASSXC_SETTINGSWIDGETKEESHARE_H
 
 #include <QPointer>
-#include <QScopedPointer>
 #include <QWidget>
 
 #include "gui/MessageWidget.h"
@@ -51,23 +50,13 @@ private slots:
     void setVerificationExporter(const QString& signer);
 
     void generateCertificate();
-    void importCertificate();
-    void exportCertificate();
-
-    void trustSelectedCertificates();
-    void askSelectedCertificates();
-    void untrustSelectedCertificates();
-    void removeSelectedCertificates();
 
 private:
     void updateOwnCertificate();
-    void updateForeignCertificates();
 
     QScopedPointer<Ui::SettingsWidgetKeeShare> m_ui;
 
     KeeShareSettings::Own m_own;
-    KeeShareSettings::Foreign m_foreign;
-    QScopedPointer<QStandardItemModel> m_importedCertificateModel;
 };
 
 #endif // KEEPASSXC_SETTINGSWIDGETKEESHARE_H

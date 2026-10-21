@@ -17,23 +17,27 @@
 
 #include "Show.h"
 
-#include <cstdlib>
-#include <stdio.h>
-
 #include "Utils.h"
-#include "cli/TextStream.h"
-#include "core/Database.h"
-#include "core/Entry.h"
-#include "core/Global.h"
 #include "core/Group.h"
+#include "core/Tools.h"
 
-const QCommandLineOption Show::TotpOption = QCommandLineOption(QStringList() << "t"
-                                                                             << "totp",
-                                                               QObject::tr("Show the entry's current TOTP."));
+#include <QCommandLineParser>
+
+const QCommandLineOption Show::TotpOption =
+    QCommandLineOption(QStringList() << "t" << "totp", QObject::tr("Show the entry's current TOTP."));
+
+const QCommandLineOption Show::ProtectedAttributesOption =
+    QCommandLineOption(QStringList() << "s" << "show-protected",
+                       QObject::tr("Show the protected attributes in clear text."));
+
+const QCommandLineOption Show::AllAttributesOption =
+    QCommandLineOption(QStringList() << "all", QObject::tr("Show all the attributes of the entry."));
+
+const QCommandLineOption Show::AttachmentsOption =
+    QCommandLineOption(QStringList() << "show-attachments", QObject::tr("Show the attachments of the entry."));
 
 const QCommandLineOption Show::AttributesOption = QCommandLineOption(
-    QStringList() << "a"
-                  << "attributes",
+    QStringList() << "a" << "attributes",
     QObject::tr(
         "Names of the attributes to show. "
         "This option can be specified more than once, with each attribute shown one-per-line in the given order. "
@@ -46,56 +50,115 @@ Show::Show()
     description = QObject::tr("Show an entry's information.");
     options.append(Show::TotpOption);
     options.append(Show::AttributesOption);
+    options.append(Show::ProtectedAttributesOption);
+    options.append(Show::AllAttributesOption);
+    options.append(Show::AttachmentsOption);
     positionalArguments.append({QString("entry"), QObject::tr("Name of the entry to show."), QString("")});
 }
 
 int Show::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
-    TextStream outputTextStream(Utils::STDOUT, QIODevice::WriteOnly);
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    auto& out = Utils::STDOUT;
+    auto& err = Utils::STDERR;
 
     const QStringList args = parser->positionalArguments();
     const QString& entryPath = args.at(1);
     bool showTotp = parser->isSet(Show::TotpOption);
+    bool showProtectedAttributes = parser->isSet(Show::ProtectedAttributesOption);
+    bool showAllAttributes = parser->isSet(Show::AllAttributesOption);
     QStringList attributes = parser->values(Show::AttributesOption);
 
     Entry* entry = database->rootGroup()->findEntryByPath(entryPath);
     if (!entry) {
-        errorTextStream << QObject::tr("Could not find entry with path %1.").arg(entryPath) << endl;
+        err << QObject::tr("Could not find entry with path %1.").arg(entryPath) << Qt::endl;
         return EXIT_FAILURE;
     }
 
     if (showTotp && !entry->hasTotp()) {
-        errorTextStream << QObject::tr("Entry with path %1 has no TOTP set up.").arg(entryPath) << endl;
+        err << QObject::tr("Entry with path %1 has no TOTP set up.").arg(entryPath) << Qt::endl;
         return EXIT_FAILURE;
     }
 
-    // If no attributes specified, output the default attribute set.
-    bool showAttributeNames = attributes.isEmpty() && !showTotp;
-    if (attributes.isEmpty() && !showTotp) {
+    bool attributesWereSpecified = true;
+    if (showAllAttributes) {
+        attributesWereSpecified = false;
         attributes = EntryAttributes::DefaultAttributes;
+        for (QString fieldName : Utils::EntryFieldNames) {
+            attributes.append(fieldName);
+        }
+        // Adding the custom attributes after the default attributes so that
+        // the default attributes are always shown first.
+        for (QString attributeName : entry->attributes()->keys()) {
+            if (EntryAttributes::DefaultAttributes.contains(attributeName)) {
+                continue;
+            }
+            attributes.append(attributeName);
+        }
+    } else if (attributes.isEmpty() && !showTotp) {
+        // If no attributes are specified, output the default attribute set.
+        attributesWereSpecified = false;
+        attributes = EntryAttributes::DefaultAttributes;
+        for (QString fieldName : Utils::EntryFieldNames) {
+            attributes.append(fieldName);
+        }
     }
 
     // Iterate over the attributes and output them line-by-line.
-    bool sawUnknownAttribute = false;
-    for (const QString& attribute : asConst(attributes)) {
-        if (!entry->attributes()->contains(attribute)) {
-            sawUnknownAttribute = true;
-            errorTextStream << QObject::tr("ERROR: unknown attribute %1.").arg(attribute) << endl;
+    bool encounteredError = false;
+    for (const QString& attributeName : asConst(attributes)) {
+        if (Utils::EntryFieldNames.contains(attributeName)) {
+            if (!attributesWereSpecified) {
+                out << attributeName << ": ";
+            }
+            out << Utils::getTopLevelField(entry, attributeName) << Qt::endl;
             continue;
         }
-        if (showAttributeNames) {
-            outputTextStream << attribute << ": ";
+
+        QStringList attrs = Utils::findAttributes(*entry->attributes(), attributeName);
+        if (attrs.isEmpty()) {
+            encounteredError = true;
+            err << QObject::tr("ERROR: unknown attribute %1.").arg(attributeName) << Qt::endl;
+            continue;
+        } else if (attrs.size() > 1) {
+            encounteredError = true;
+            err << QObject::tr("ERROR: attribute %1 is ambiguous, it matches %2.")
+                       .arg(attributeName, QLocale().createSeparatedList(attrs))
+                << Qt::endl;
+            continue;
         }
-        outputTextStream << entry->resolveMultiplePlaceholders(entry->attributes()->value(attribute)) << endl;
+        QString canonicalName = attrs[0];
+        if (!attributesWereSpecified) {
+            out << canonicalName << ": ";
+        }
+        if (entry->attributes()->isProtected(canonicalName) && !attributesWereSpecified && !showProtectedAttributes) {
+            out << "PROTECTED" << Qt::endl;
+        } else {
+            out << entry->resolveMultiplePlaceholders(entry->attributes()->value(canonicalName)) << Qt::endl;
+        }
+    }
+
+    if (parser->isSet(Show::AttachmentsOption)) {
+        // Separate attachment output from attributes output via a newline.
+        out << Qt::endl;
+
+        EntryAttachments* attachments = entry->attachments();
+        if (attachments->isEmpty()) {
+            out << QObject::tr("No attachments present.") << Qt::endl;
+        } else {
+            out << QObject::tr("Attachments:") << Qt::endl;
+
+            // Iterate over the attachments and output their names and size line-by-line, indented.
+            for (const QString& attachmentName : attachments->keys()) {
+                // TODO: use QLocale::formattedDataSize when >= Qt 5.10
+                QString attachmentSize = Tools::humanReadableFileSize(attachments->value(attachmentName).size(), 1);
+                out << "  " << attachmentName << " (" << attachmentSize << ")" << Qt::endl;
+            }
+        }
     }
 
     if (showTotp) {
-        if (showAttributeNames) {
-            outputTextStream << "TOTP: ";
-        }
-        outputTextStream << entry->totp() << endl;
+        out << entry->totp() << Qt::endl;
     }
 
-    return sawUnknownAttribute ? EXIT_FAILURE : EXIT_SUCCESS;
+    return encounteredError ? EXIT_FAILURE : EXIT_SUCCESS;
 }

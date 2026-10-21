@@ -18,10 +18,13 @@
 #ifndef KEEPASSXC_KEESHARESETTINGS_H
 #define KEEPASSXC_KEESHARESETTINGS_H
 
-#include <QMap>
-#include <QObject>
+#include <QSharedPointer>
+#include <QUuid>
 
-#include "crypto/ssh/OpenSSHKey.h"
+namespace Botan
+{
+    class Private_Key;
+}
 
 class CustomData;
 class QXmlStreamWriter;
@@ -31,7 +34,7 @@ namespace KeeShareSettings
 {
     struct Certificate
     {
-        QByteArray key;
+        QSharedPointer<Botan::Private_Key> key;
         QString signer;
 
         bool operator==(const Certificate& other) const;
@@ -39,8 +42,6 @@ namespace KeeShareSettings
 
         bool isNull() const;
         QString fingerprint() const;
-        QString publicKey() const;
-        OpenSSHKey sshKey() const;
 
         static void serialize(QXmlStreamWriter& writer, const Certificate& certificate);
         static Certificate deserialize(QXmlStreamReader& reader);
@@ -48,14 +49,12 @@ namespace KeeShareSettings
 
     struct Key
     {
-        QByteArray key;
+        QSharedPointer<Botan::Private_Key> key;
 
         bool operator==(const Key& other) const;
         bool operator!=(const Key& other) const;
 
         bool isNull() const;
-        QString privateKey() const;
-        OpenSSHKey sshKey() const;
 
         static void serialize(QXmlStreamWriter& writer, const Key& key);
         static Key deserialize(QXmlStreamReader& reader);
@@ -99,42 +98,6 @@ namespace KeeShareSettings
         static Own generate();
     };
 
-    enum class Trust
-    {
-        Ask,
-        Untrusted,
-        Trusted
-    };
-    struct ScopedCertificate
-    {
-        QString path;
-        Certificate certificate;
-        Trust trust;
-
-        bool operator==(const ScopedCertificate& other) const;
-        bool operator!=(const ScopedCertificate& other) const;
-
-        bool isUnknown() const
-        {
-            return certificate.isNull();
-        }
-        bool isKnown() const
-        {
-            return !certificate.isNull();
-        }
-
-        static void serialize(QXmlStreamWriter& writer, const ScopedCertificate& certificate);
-        static ScopedCertificate deserialize(QXmlStreamReader& reader);
-    };
-
-    struct Foreign
-    {
-        QList<ScopedCertificate> certificates;
-
-        static QString serialize(const Foreign& foreign);
-        static Foreign deserialize(const QString& raw);
-    };
-
     struct Sign
     {
         QString signature;
@@ -146,7 +109,6 @@ namespace KeeShareSettings
         }
 
         static QString serialize(const Sign& sign);
-        static Sign deserialize(const QString& raw);
     };
 
     enum TypeFlag
@@ -160,10 +122,11 @@ namespace KeeShareSettings
 
     struct Reference
     {
-        Type type;
+        Type type = Inactive;
         QUuid uuid;
         QString path;
         QString password;
+        bool keepGroups = true;
 
         Reference();
         bool isNull() const;

@@ -18,50 +18,45 @@
 #ifndef KEEPASSXC_FDOSECRETS_SESSION_H
 #define KEEPASSXC_FDOSECRETS_SESSION_H
 
-#include "fdosecrets/objects/DBusObject.h"
-#include "fdosecrets/objects/Service.h"
-#include "fdosecrets/objects/SessionCipher.h"
-#include "fdosecrets/objects/adaptors/SessionAdaptor.h"
-
-#include <QByteArray>
-#include <QHash>
-#include <QUuid>
-#include <QVariant>
-
-#include <memory>
+#include "fdosecrets/dbus/DBusObject.h"
 
 namespace FdoSecrets
 {
-
     class CipherPair;
     class Session : public DBusObject
     {
         Q_OBJECT
+        Q_CLASSINFO("D-Bus Interface", DBUS_INTERFACE_SECRET_SESSION_LITERAL)
+
+        explicit Session(QSharedPointer<CipherPair> cipher, const QString& peer, Service* parent);
+
     public:
-        static std::unique_ptr<CipherPair> CreateCiphers(const QString& peer,
-                                                         const QString& algorithm,
-                                                         const QVariant& intpu,
-                                                         QVariant& output,
-                                                         bool& incomplete);
-        static void CleanupNegotiation(const QString& peer);
+        /**
+         * @brief Create a new instance of `Session`.
+         * @param cipher the negotiated cipher
+         * @param peer connecting peer
+         * @param parent the owning Service
+         * @return pointer to newly created Session, or nullptr if error
+         * This may be caused by
+         *   - DBus path registration error
+         */
+        static Session* Create(QSharedPointer<CipherPair> cipher, const QString& peer, Service* parent);
 
-        explicit Session(std::unique_ptr<CipherPair>&& cipher, const QString& peer, Service* parent);
-
-        DBusReturn<void> close();
+        Q_INVOKABLE DBusResult close();
 
         /**
          * Encode the secret struct. Note only the value field is encoded.
          * @param input
          * @return
          */
-        SecretStruct encode(const SecretStruct& input) const;
+        Secret encode(const Secret& input) const;
 
         /**
          * Decode the secret struct.
          * @param input
          * @return
          */
-        SecretStruct decode(const SecretStruct& input) const;
+        Secret decode(const Secret& input) const;
 
         /**
          * The peer application that opened this session
@@ -71,6 +66,8 @@ namespace FdoSecrets
 
         QString id() const;
 
+        Service* service() const;
+
     signals:
         /**
          * The session is going to be closed
@@ -79,11 +76,9 @@ namespace FdoSecrets
         void aboutToClose();
 
     private:
-        std::unique_ptr<CipherPair> m_cipher;
+        QSharedPointer<CipherPair> m_cipher;
         QString m_peer;
         QUuid m_id;
-
-        static QHash<QString, QVariant> negoniationState;
     };
 
 } // namespace FdoSecrets

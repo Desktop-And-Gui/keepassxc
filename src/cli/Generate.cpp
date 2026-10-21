@@ -15,44 +15,39 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cstdlib>
-#include <stdio.h>
-
 #include "Generate.h"
 
-#include "cli/TextStream.h"
-#include "cli/Utils.h"
+#include "Utils.h"
+#include "core/Global.h"
+#include "core/PasswordGenerator.h"
+
+#include <QCommandLineParser>
 
 const QCommandLineOption Generate::PasswordLengthOption =
-    QCommandLineOption(QStringList() << "L"
-                                     << "length",
+    QCommandLineOption(QStringList() << "L" << "length",
                        QObject::tr("Length of the generated password"),
                        QObject::tr("length"));
 
-const QCommandLineOption Generate::LowerCaseOption = QCommandLineOption(QStringList() << "l"
-                                                                                      << "lower",
-                                                                        QObject::tr("Use lowercase characters"));
+const QCommandLineOption Generate::LowerCaseOption =
+    QCommandLineOption(QStringList() << "l" << "lower", QObject::tr("Use lowercase characters"));
 
-const QCommandLineOption Generate::UpperCaseOption = QCommandLineOption(QStringList() << "U"
-                                                                                      << "upper",
-                                                                        QObject::tr("Use uppercase characters"));
+const QCommandLineOption Generate::UpperCaseOption =
+    QCommandLineOption(QStringList() << "U" << "upper", QObject::tr("Use uppercase characters"));
 
-const QCommandLineOption Generate::NumbersOption = QCommandLineOption(QStringList() << "n"
-                                                                                    << "numeric",
-                                                                      QObject::tr("Use numbers"));
+const QCommandLineOption Generate::NumbersOption =
+    QCommandLineOption(QStringList() << "n" << "numeric", QObject::tr("Use numbers"));
 
-const QCommandLineOption Generate::SpecialCharsOption = QCommandLineOption(QStringList() << "s"
-                                                                                         << "special",
-                                                                           QObject::tr("Use special characters"));
+const QCommandLineOption Generate::SpecialCharsOption =
+    QCommandLineOption(QStringList() << "s" << "special", QObject::tr("Use special characters"));
 
-const QCommandLineOption Generate::ExtendedAsciiOption = QCommandLineOption(QStringList() << "e"
-                                                                                          << "extended",
-                                                                            QObject::tr("Use extended ASCII"));
+const QCommandLineOption Generate::ExtendedAsciiOption =
+    QCommandLineOption(QStringList() << "e" << "extended", QObject::tr("Use extended ASCII"));
 
-const QCommandLineOption Generate::ExcludeCharsOption = QCommandLineOption(QStringList() << "x"
-                                                                                         << "exclude",
-                                                                           QObject::tr("Exclude character set"),
-                                                                           QObject::tr("chars"));
+const QCommandLineOption Generate::ExcludeCharsOption =
+    QCommandLineOption(QStringList() << "x" << "exclude", QObject::tr("Exclude character set"), QObject::tr("chars"));
+
+const QCommandLineOption Generate::CustomCharacterSetOption =
+    QCommandLineOption(QStringList() << "c" << "custom", QObject::tr("Use custom character set"), QObject::tr("chars"));
 
 const QCommandLineOption Generate::ExcludeSimilarCharsOption =
     QCommandLineOption(QStringList() << "exclude-similar", QObject::tr("Exclude similar looking characters"));
@@ -72,6 +67,7 @@ Generate::Generate()
     options.append(Generate::ExcludeCharsOption);
     options.append(Generate::ExcludeSimilarCharsOption);
     options.append(Generate::IncludeEveryGroupOption);
+    options.append(Generate::CustomCharacterSetOption);
 }
 
 /**
@@ -80,19 +76,19 @@ Generate::Generate()
  */
 QSharedPointer<PasswordGenerator> Generate::createGenerator(QSharedPointer<QCommandLineParser> parser)
 {
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    auto& err = Utils::STDERR;
     QSharedPointer<PasswordGenerator> passwordGenerator = QSharedPointer<PasswordGenerator>(new PasswordGenerator());
     QString passwordLength = parser->value(Generate::PasswordLengthOption);
     if (passwordLength.isEmpty()) {
         passwordGenerator->setLength(PasswordGenerator::DefaultLength);
     } else if (passwordLength.toInt() <= 0) {
-        errorTextStream << QObject::tr("Invalid password length %1").arg(passwordLength) << endl;
-        return QSharedPointer<PasswordGenerator>(nullptr);
+        err << QObject::tr("Invalid password length %1").arg(passwordLength) << Qt::endl;
+        return {};
     } else {
         passwordGenerator->setLength(passwordLength.toInt());
     }
 
-    PasswordGenerator::CharClasses classes = 0x0;
+    PasswordGenerator::CharClasses classes;
 
     if (parser->isSet(Generate::LowerCaseOption)) {
         classes |= PasswordGenerator::LowerLetters;
@@ -110,7 +106,7 @@ QSharedPointer<PasswordGenerator> Generate::createGenerator(QSharedPointer<QComm
         classes |= PasswordGenerator::EASCII;
     }
 
-    PasswordGenerator::GeneratorFlags flags = 0x0;
+    PasswordGenerator::GeneratorFlags flags;
 
     if (parser->isSet(Generate::ExcludeSimilarCharsOption)) {
         flags |= PasswordGenerator::ExcludeLookAlike;
@@ -121,13 +117,19 @@ QSharedPointer<PasswordGenerator> Generate::createGenerator(QSharedPointer<QComm
 
     // The default charset will be used if no explicit class
     // option was set.
-    passwordGenerator->setCharClasses(classes);
-    passwordGenerator->setFlags(flags);
-    passwordGenerator->setExcludedChars(parser->value(Generate::ExcludeCharsOption));
+    if (flags != 0x0) {
+        passwordGenerator->setFlags(flags);
+    }
+    QString customCharacterSet = parser->value(Generate::CustomCharacterSetOption);
+    if (classes != 0x0 || !customCharacterSet.isNull()) {
+        passwordGenerator->setCharClasses(classes);
+    }
+    passwordGenerator->setCustomCharacterSet(customCharacterSet);
+    passwordGenerator->setExcludedCharacterSet(parser->value(Generate::ExcludeCharsOption));
 
     if (!passwordGenerator->isValid()) {
-        errorTextStream << QObject::tr("Invalid password generator after applying all options") << endl;
-        return QSharedPointer<PasswordGenerator>(nullptr);
+        err << QObject::tr("Invalid password generator after applying all options") << Qt::endl;
+        return {};
     }
 
     return passwordGenerator;
@@ -145,9 +147,9 @@ int Generate::execute(const QStringList& arguments)
         return EXIT_FAILURE;
     }
 
-    TextStream outputTextStream(Utils::STDOUT, QIODevice::WriteOnly);
+    auto& out = Utils::STDOUT;
     QString password = passwordGenerator->generatePassword();
-    outputTextStream << password << endl;
+    out << password << Qt::endl;
 
     return EXIT_SUCCESS;
 }

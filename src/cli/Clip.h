@@ -27,7 +27,9 @@ public:
 
     int executeWithDatabase(QSharedPointer<Database> db, QSharedPointer<QCommandLineParser> parser) override;
 
+    static const QCommandLineOption AttributeOption;
     static const QCommandLineOption TotpOption;
+    static const QCommandLineOption BestMatchOption;
 };
 
 #endif // KEEPASSXC_CLIP_H

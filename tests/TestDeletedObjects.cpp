@@ -16,18 +16,20 @@
  */
 
 #include "TestDeletedObjects.h"
-#include "TestGlobal.h"
 
 #include "config-keepassx-tests.h"
+#include "core/Group.h"
 #include "crypto/Crypto.h"
 #include "format/KdbxXmlReader.h"
 #include "format/KeePass2.h"
+#include <QTest>
 
 QTEST_GUILESS_MAIN(TestDeletedObjects)
 
 void TestDeletedObjects::initTestCase()
 {
     QVERIFY(Crypto::init());
+    QLocale::setDefault(QLocale::c());
 }
 
 void TestDeletedObjects::createAndDelete(QSharedPointer<Database> db, int delObjectsSize)
@@ -36,7 +38,7 @@ void TestDeletedObjects::createAndDelete(QSharedPointer<Database> db, int delObj
     Group* root = db->rootGroup();
     int rootChildrenCount = root->children().size();
 
-    Group* g = new Group();
+    auto g = new Group();
     g->setParent(root);
     QUuid gUuid = QUuid::createUuid();
     g->setUuid(gUuid);
@@ -45,19 +47,19 @@ void TestDeletedObjects::createAndDelete(QSharedPointer<Database> db, int delObj
     QCOMPARE(db->deletedObjects().at(delObjectsSize - 1).uuid, gUuid);
     QCOMPARE(rootChildrenCount, root->children().size());
 
-    Group* g1 = new Group();
+    auto g1 = new Group();
     g1->setParent(root);
     QUuid g1Uuid = QUuid::createUuid();
     g1->setUuid(g1Uuid);
-    Entry* e1 = new Entry();
+    auto e1 = new Entry();
     e1->setGroup(g1);
     QUuid e1Uuid = QUuid::createUuid();
     e1->setUuid(e1Uuid);
-    Group* g2 = new Group();
+    auto g2 = new Group();
     g2->setParent(g1);
     QUuid g2Uuid = QUuid::createUuid();
     g2->setUuid(g2Uuid);
-    Entry* e2 = new Entry();
+    auto e2 = new Entry();
     e2->setGroup(g2);
     QUuid e2Uuid = QUuid::createUuid();
     e2->setUuid(e2Uuid);
@@ -72,7 +74,7 @@ void TestDeletedObjects::createAndDelete(QSharedPointer<Database> db, int delObj
     QCOMPARE(db->deletedObjects().at(delObjectsSize - 1).uuid, g1Uuid);
     QCOMPARE(rootChildrenCount, root->children().size());
 
-    Entry* e3 = new Entry();
+    auto e3 = new Entry();
     e3->setGroup(root);
     QUuid e3Uuid = QUuid::createUuid();
     e3->setUuid(e3Uuid);
@@ -150,4 +152,16 @@ void TestDeletedObjects::testDatabaseChange()
     QCOMPARE(db2->deletedObjects().size(), delObjectsSize2);
 
     delete group;
+}
+
+void TestDeletedObjects::testCustomIconDeletion()
+{
+    Database db;
+    QCOMPARE(db.deletedObjects().size(), 0);
+
+    QUuid uuid = QUuid::createUuid();
+    db.metadata()->addCustomIcon(uuid, QByteArray());
+    db.metadata()->removeCustomIcon(uuid);
+    QCOMPARE(db.deletedObjects().size(), 1);
+    QCOMPARE(db.deletedObjects().at(0).uuid, uuid);
 }

@@ -21,6 +21,8 @@
 #include <QSharedPointer>
 #include <QString>
 
+#include "core/Group.h"
+
 class Database;
 class Group;
 class QIODevice;
@@ -28,12 +30,27 @@ class QIODevice;
 class HtmlExporter
 {
 public:
-    bool exportDatabase(const QString& filename, const QSharedPointer<const Database>& db);
+    bool exportDatabase(const QString& filename,
+                        const QSharedPointer<const Database>& db,
+                        bool sorted = true,
+                        bool ascending = true);
+    bool exportDatabase(QIODevice* device,
+                        const QSharedPointer<const Database>& db,
+                        bool sorted = true,
+                        bool ascending = true);
+    QString exportDatabase(const QSharedPointer<const Database>& db, bool sorted = true, bool ascending = true);
     QString errorString() const;
 
+    virtual ~HtmlExporter() = default;
+
+protected:
+    virtual QString groupIconToHtml(const Group* group);
+    virtual QString entryIconToHtml(const Entry* entry);
+
 private:
-    bool exportDatabase(QIODevice* device, const QSharedPointer<const Database>& db);
-    bool writeGroup(QIODevice& device, const Group& group, QString path = QString());
+    QString exportGroup(const Group& group, QString path = QString(), bool sorted = true, bool ascending = true);
+    QString exportHeader(const QSharedPointer<const Database>& db);
+    QString exportFooter();
 
     QString m_error;
 };

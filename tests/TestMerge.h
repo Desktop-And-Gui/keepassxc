@@ -19,9 +19,6 @@
 #define KEEPASSX_TESTMERGE_H
 
 #include "core/Database.h"
-#include <QDateTime>
-#include <QMap>
-#include <QObject>
 #include <functional>
 
 class TestMerge : public QObject
@@ -33,20 +30,15 @@ private slots:
     void cleanup();
     void testMergeIntoNew();
     void testMergeNoChanges();
+    void testMergeCustomData();
     void testResolveConflictNewer();
     void testResolveConflictExisting();
     void testResolveGroupConflictOlder();
     void testMergeNotModified();
     void testMergeModified();
-    void testResolveConflictDuplicate();
     void testResolveConflictEntry_Synchronize();
-    void testResolveConflictEntry_KeepLocal();
-    void testResolveConflictEntry_KeepRemote();
     void testResolveConflictEntry_KeepNewer();
-    void testDeletionConflictEntry_Duplicate();
     void testDeletionConflictEntry_Synchronized();
-    void testDeletionConflictEntry_KeepLocal();
-    void testDeletionConflictEntry_KeepRemote();
     void testDeletionConflictEntry_KeepNewer();
     void testMoveEntry();
     void testMoveEntryPreserveChanges();

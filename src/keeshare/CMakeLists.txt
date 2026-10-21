@@ -1,37 +1,31 @@
-if(WITH_XC_KEESHARE)
-    set(WITH_XC_KEESHARE_INSECURE ON PARENT_SCOPE)
+#  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 2 or (at your option)
+#  version 3 of the License.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-    include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-
-    set(keeshare_SOURCES
-        SettingsPageKeeShare.cpp
-        SettingsWidgetKeeShare.cpp
-        DatabaseSettingsPageKeeShare.cpp
-        DatabaseSettingsWidgetKeeShare.cpp
-        group/EditGroupWidgetKeeShare.cpp
-        group/EditGroupPageKeeShare.cpp
-        KeeShare.cpp
-        KeeShareSettings.cpp
-        ShareImport.cpp
-        ShareExport.cpp
-        ShareObserver.cpp
-        Signature.cpp
+set(keeshare_SOURCES
+    SettingsPageKeeShare.cpp
+    SettingsWidgetKeeShare.cpp
+    DatabaseSettingsWidgetKeeShare.cpp
+    group/EditGroupWidgetKeeShare.cpp
+    group/EditGroupPageKeeShare.cpp
+    KeeShare.cpp
+    KeeShareSettings.cpp
+    ShareImport.cpp
+    ShareExport.cpp
+    ShareObserver.cpp
     )
 
-    add_library(keeshare STATIC ${keeshare_SOURCES})
-    target_link_libraries(keeshare PUBLIC Qt5::Core Qt5::Widgets ${GCRYPT_LIBRARIES} ${crypto_ssh_LIB})
-
-    # Try to find libquazip5, if found, enable secure sharing
-    find_package(QuaZip)
-    if(QUAZIP_FOUND)
-        set(WITH_XC_KEESHARE_SECURE ON PARENT_SCOPE)
-        target_include_directories(keeshare SYSTEM PRIVATE ${QUAZIP_INCLUDE_DIR})
-        target_link_libraries(keeshare PRIVATE ${QUAZIP_LIBRARIES})
-    else()
-        set(WITH_XC_KEESHARE_SECURE OFF PARENT_SCOPE)
-        message(STATUS "KeeShare: Secure container support is DISABLED; quazip library not found")
-    endif()
-else(WITH_XC_KEESHARE)
-    set(WITH_XC_KEESHARE_INSECURE OFF PARENT_SCOPE)
-    set(WITH_XC_KEESHARE_SECURE OFF PARENT_SCOPE)
-endif(WITH_XC_KEESHARE)
+add_library(keeshare STATIC ${keeshare_SOURCES})
+target_link_libraries(keeshare PUBLIC Qt6::Core Qt6::Widgets ${BOTAN_LIBRARIES} ${ZLIB_LIBRARIES} PRIVATE ${MINIZIP_LIBRARIES})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})

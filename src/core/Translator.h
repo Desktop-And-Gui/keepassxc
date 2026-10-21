@@ -18,14 +18,13 @@
 #ifndef KEEPASSX_TRANSLATOR_H
 #define KEEPASSX_TRANSLATOR_H
 
-#include <QLocale>
-#include <QPair>
+#include <QMetaType>
 #include <QString>
 
 class Translator
 {
 public:
-    static void installTranslators();
+    static void installTranslators(const QString& uiLanguage = "system");
     static QList<QPair<QString, QString>> availableLanguages();
 
 private:

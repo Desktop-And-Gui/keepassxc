@@ -16,12 +16,9 @@
  */
 
 #include <QFile>
-#include <QIODevice>
 
-#include "core/Database.h"
 #include "core/Group.h"
 #include "core/Metadata.h"
-#include "crypto/kdf/AesKdf.h"
 #include "format/Kdbx3Writer.h"
 #include "format/Kdbx4Writer.h"
 #include "format/KeePass2Writer.h"
@@ -43,38 +40,71 @@ bool KeePass2Writer::writeDatabase(const QString& filename, Database* db)
     return writeDatabase(&file, db);
 }
 
+#define VERSION_MAX(a, b)                                                                                              \
+    a = qMax(a, b);                                                                                                    \
+    if (a >= KeePass2::FILE_VERSION_MAX) {                                                                             \
+        return a;                                                                                                      \
+    }
+
 /**
- * @return true if the database should upgrade to KDBX4.
+ * Get the minimum KDBX version required for writing the database.
  */
-bool KeePass2Writer::implicitUpgradeNeeded(Database const* db) const
+quint32 KeePass2Writer::kdbxVersionRequired(Database const* db, bool ignoreCurrent, bool ignoreKdf)
 {
-    if (db->kdf()->uuid() != KeePass2::KDF_AES_KDBX3) {
-        return false;
+    quint32 version = KeePass2::FILE_VERSION_3_1;
+    if (!ignoreCurrent) {
+        VERSION_MAX(version, db->formatVersion())
+    }
+
+    if (!ignoreKdf && !db->kdf().isNull() && !db->kdf()->uuid().isNull()
+        && db->kdf()->uuid() != KeePass2::KDF_AES_KDBX3) {
+        VERSION_MAX(version, KeePass2::FILE_VERSION_4)
     }
 
     if (!db->publicCustomData().isEmpty()) {
-        return true;
+        VERSION_MAX(version, KeePass2::FILE_VERSION_4)
     }
 
-    for (const auto& group : db->rootGroup()->groupsRecursive(true)) {
+    for (const auto* group : db->rootGroup()->groupsRecursive(true)) {
         if (group->customData() && !group->customData()->isEmpty()) {
-            return true;
+            VERSION_MAX(version, KeePass2::FILE_VERSION_4)
+        }
+        if (!group->tags().isEmpty()) {
+            VERSION_MAX(version, KeePass2::FILE_VERSION_4_1)
+        }
+        if (group->previousParentGroup()) {
+            VERSION_MAX(version, KeePass2::FILE_VERSION_4_1)
         }
 
-        for (const auto& entry : group->entries()) {
+        for (const auto* entry : group->entries()) {
+
             if (entry->customData() && !entry->customData()->isEmpty()) {
-                return true;
+                VERSION_MAX(version, KeePass2::FILE_VERSION_4)
+            }
+            if (entry->excludeFromReports()) {
+                VERSION_MAX(version, KeePass2::FILE_VERSION_4_1)
+            }
+            if (entry->previousParentGroup()) {
+                VERSION_MAX(version, KeePass2::FILE_VERSION_4_1)
             }
 
-            for (const auto& historyItem : entry->historyItems()) {
+            for (const auto* historyItem : entry->historyItems()) {
                 if (historyItem->customData() && !historyItem->customData()->isEmpty()) {
-                    return true;
+                    VERSION_MAX(version, KeePass2::FILE_VERSION_4)
                 }
             }
         }
     }
 
-    return false;
+    const QList<QUuid> customIconsOrder = db->metadata()->customIconsOrder();
+    for (const QUuid& uuid : customIconsOrder) {
+        const auto& icon = db->metadata()->customIcon(uuid);
+        if (!icon.name.isEmpty() || icon.lastModified.isValid()) {
+            VERSION_MAX(version, KeePass2::FILE_VERSION_4_1)
+        }
+    }
+
+    return version;
 }
 
 /**
@@ -89,19 +119,21 @@ bool KeePass2Writer::writeDatabase(QIODevice* device, Database* db)
     m_error = false;
     m_errorStr.clear();
 
-    bool upgradeNeeded = implicitUpgradeNeeded(db);
-    if (upgradeNeeded) {
+    m_version = kdbxVersionRequired(db);
+    if (db->kdf()->uuid() == KeePass2::KDF_AES_KDBX3 && m_version >= KeePass2::FILE_VERSION_4) {
         // We MUST re-transform the key, because challenge-response hashing has changed in KDBX 4.
         // If we forget to re-transform, the database will be saved WITHOUT a challenge-response key component!
-        db->changeKdf(KeePass2::uuidToKdf(KeePass2::KDF_AES_KDBX4));
+        auto kdf = KeePass2::uuidToKdf(KeePass2::KDF_AES_KDBX4);
+        kdf->setRounds(db->kdf()->rounds());
+        db->changeKdf(kdf);
     }
 
+    db->setFormatVersion(m_version);
     if (db->kdf()->uuid() == KeePass2::KDF_AES_KDBX3) {
-        Q_ASSERT(!upgradeNeeded);
-        m_version = KeePass2::FILE_VERSION_3_1;
+        Q_ASSERT(m_version <= KeePass2::FILE_VERSION_3_1);
         m_writer.reset(new Kdbx3Writer());
     } else {
-        m_version = KeePass2::FILE_VERSION_4;
+        Q_ASSERT(m_version >= KeePass2::FILE_VERSION_4);
         m_writer.reset(new Kdbx4Writer());
     }
 
@@ -113,11 +145,13 @@ void KeePass2Writer::extractDatabase(Database* db, QByteArray& xmlOutput)
     m_error = false;
     m_errorStr.clear();
 
+    m_version = kdbxVersionRequired(db);
+    db->setFormatVersion(m_version);
     if (db->kdf()->uuid() == KeePass2::KDF_AES_KDBX3) {
-        m_version = KeePass2::FILE_VERSION_3_1;
+        Q_ASSERT(m_version <= KeePass2::FILE_VERSION_3_1);
         m_writer.reset(new Kdbx3Writer());
     } else {
-        m_version = KeePass2::FILE_VERSION_4;
+        Q_ASSERT(m_version >= KeePass2::FILE_VERSION_4);
         m_writer.reset(new Kdbx4Writer());
     }
 
@@ -150,7 +184,7 @@ void KeePass2Writer::raiseError(const QString& errorMessage)
  */
 QSharedPointer<KdbxWriter> KeePass2Writer::writer() const
 {
-    return QSharedPointer<KdbxWriter>();
+    return {};
 }
 
 /**

@@ -20,20 +20,17 @@
  */
 #include "KMessageWidget.h"
 
-#include "core/FilePath.h"
 #include "core/Global.h"
+#include "gui/Icons.h"
 
 #include <QAction>
+#include <QBoxLayout>
 #include <QEvent>
-#include <QGridLayout>
-#include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
-#include <QShowEvent>
+#include <QStyle>
 #include <QTimeLine>
 #include <QToolButton>
-#include <QStyle>
-#include <QtGui/QBitmap>
 
 //---------------------------------------------------------------------
 // KMessageWidgetPrivate
@@ -91,10 +88,10 @@ void KMessageWidgetPrivate::init(KMessageWidget *q_ptr)
     QObject::connect(textLabel, SIGNAL(linkActivated(QString)), q, SIGNAL(linkActivated(QString)));
     QObject::connect(textLabel, SIGNAL(linkHovered(QString)), q, SIGNAL(linkHovered(QString)));
 
-    QAction *closeAction = new QAction(q);
+    auto closeAction = new QAction(q);
     closeAction->setText(KMessageWidget::tr("&Close"));
     closeAction->setToolTip(KMessageWidget::tr("Close message"));
-    closeAction->setIcon(FilePath::instance()->icon("actions", "message-close", false));
+    closeAction->setIcon(icons()->icon("message-close"));
 
     QObject::connect(closeAction, SIGNAL(triggered(bool)), q, SLOT(animatedHide()));
 
@@ -102,12 +99,6 @@ void KMessageWidgetPrivate::init(KMessageWidget *q_ptr)
     closeButton->setAutoRaise(true);
     closeButton->setDefaultAction(closeAction);
     closeButtonPixmap = QPixmap(closeButton->icon().pixmap(closeButton->icon().actualSize(QSize(16, 16))));
-#ifdef Q_OS_MACOS
-    closeButton->setStyleSheet("QToolButton { background: transparent;"
-                                   "border-radius: 2px; padding: 3px; }"
-                               "QToolButton::hover, QToolButton::focus {"
-                                   "border: 1px solid rgb(90, 200, 250); }");
-#endif
 
     q->setMessageType(KMessageWidget::Information);
 }
@@ -123,7 +114,7 @@ void KMessageWidgetPrivate::createLayout()
 
     const auto actions = q->actions();
     for (QAction *action: actions) {
-        QToolButton *button = new QToolButton(content);
+        auto button = new QToolButton(content);
         button->setDefaultAction(action);
         button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         buttons.append(button);
@@ -135,12 +126,12 @@ void KMessageWidgetPrivate::createLayout()
     closeButton->setAutoRaise(buttons.isEmpty());
 
     if (wordWrap) {
-        QGridLayout *layout = new QGridLayout(content);
+        auto layout = new QGridLayout(content);
         // Set alignment to make sure icon does not move down if text wraps
         layout->addWidget(iconLabel, 0, 0, 1, 1, Qt::AlignHCenter | Qt::AlignTop);
         layout->addWidget(textLabel, 0, 1);
 
-        QHBoxLayout *buttonLayout = new QHBoxLayout;
+        auto buttonLayout = new QHBoxLayout;
         buttonLayout->addStretch();
         for (QToolButton* button: asConst(buttons)) {
             // For some reason, calling show() is necessary if wordwrap is true,
@@ -152,7 +143,7 @@ void KMessageWidgetPrivate::createLayout()
         buttonLayout->addWidget(closeButton);
         layout->addItem(buttonLayout, 1, 0, 1, 2);
     } else {
-        QHBoxLayout *layout = new QHBoxLayout(content);
+        auto layout = new QHBoxLayout(content);
         layout->addWidget(iconLabel);
         layout->addWidget(textLabel);
 
@@ -263,7 +254,7 @@ void KMessageWidget::setMessageType(KMessageWidget::MessageType type)
 {
     d->messageType = type;
     QColor bg0, bg1, bg2, border;
-    QColor fg = palette().light().color();
+    QColor fg = QColor(238, 238, 238);
     switch (type) {
     case Positive:
         bg1.setRgb(37, 163, 83);
@@ -273,7 +264,7 @@ void KMessageWidget::setMessageType(KMessageWidget::MessageType type)
         break;
     case Warning:
         bg1.setRgb(252, 193, 57);
-        fg = palette().windowText().color();
+        fg = QColor(48, 48, 48);
         break;
     case Error:
         bg1.setRgb(198, 69, 21);
@@ -289,14 +280,24 @@ void KMessageWidget::setMessageType(KMessageWidget::MessageType type)
     auto closeButtonPixmap = d->closeButtonPixmap;
     QPainter painter;
     painter.begin(&closeButtonPixmap);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+    painter.setRenderHints(QPainter::Antialiasing);
+#else
     painter.setRenderHints(QPainter::HighQualityAntialiasing);
+#endif
     painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
     painter.fillRect(QRect(0, 0, 16, 16), fg);
     painter.end();
     d->closeButton->setIcon(closeButtonPixmap);
+    d->closeButton->setStyleSheet(QStringLiteral("QToolButton {"
+                                  "  background: transparent;"
+                                  "  border-radius: 2px;"
+                                  "  border: none; }"
+                                  "QToolButton:hover, QToolButton:focus {"
+                                  "  border: 1px solid %1; }").arg(fg.name()));
 
     d->content->setStyleSheet(
-        QString(QLatin1String(".QFrame {"
+        QStringLiteral(".QFrame {"
         "background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,"
         "    stop: 0 %1,"
         "    stop: 0.1 %2,"
@@ -307,7 +308,7 @@ void KMessageWidget::setMessageType(KMessageWidget::MessageType type)
         "    padding: 5px;"
         "}"
         ".QLabel { color: %6; }"
-        ))
+        )
         .arg(bg0.name(),
              bg1.name(),
              bg2.name(),

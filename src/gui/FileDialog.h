@@ -37,13 +37,6 @@ public:
                                  QString* selectedFilter = nullptr,
                                  const QFileDialog::Options options = {});
 
-    QString getFileName(QWidget* parent = nullptr,
-                        const QString& caption = QString(),
-                        const QString& dir = QString(),
-                        const QString& filter = QString(),
-                        QString* selectedFilter = nullptr,
-                        const QFileDialog::Options options = {});
-
     QString getSaveFileName(QWidget* parent = nullptr,
                             const QString& caption = QString(),
                             const QString& dir = QString(),
@@ -56,14 +49,14 @@ public:
                                  const QString& dir = QString(),
                                  const QFileDialog::Options options = QFileDialog::ShowDirsOnly);
 
-    void setNextForgetDialog();
     /**
-     * Sets the result of the next get* method call.
-     * Use only for testing.
+     * Bypasses the selection process and returns the provided filename/directory immediately (for testing)
      */
     void setNextFileName(const QString& fileName);
-    void setNextFileNames(const QStringList& fileNames);
-    void setNextDirName(const QString& dirName);
+    void setNextDirectory(const QString& path);
+
+    static void saveLastDir(const QString& role, const QString& path, bool sensitive = false);
+    static QString getLastDir(const QString& role, const QString& defaultDir = QString());
 
     static FileDialog* instance();
 
@@ -72,9 +65,6 @@ private:
     QString m_nextFileName;
     QStringList m_nextFileNames;
     QString m_nextDirName;
-    bool m_forgetLastDir = false;
-
-    void saveLastDir(const QString&);
 
     static FileDialog* m_instance;
 

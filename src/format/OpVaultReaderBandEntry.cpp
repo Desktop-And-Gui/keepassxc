@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2019 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -27,7 +27,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QUuid>
 
 bool OpVaultReader::decryptBandEntry(const QJsonObject& bandEntry,
                                      QJsonObject& data,
@@ -62,7 +61,7 @@ bool OpVaultReader::decryptBandEntry(const QJsonObject& bandEntry,
     QByteArray kBA = QByteArray::fromBase64(entKStr.toUtf8());
     const int wantKsize = 16 + 32 + 32 + 32;
     if (kBA.size() != wantKsize) {
-        qCritical("Malformed \"k\" size; expected %d got %d\n", wantKsize, kBA.size());
+        qCritical("Malformed \"k\" size; expected %d got %" PRIdQPTRDIFF "\n", wantKsize, kBA.size());
         return false;
     }
 
@@ -79,12 +78,12 @@ bool OpVaultReader::decryptBandEntry(const QJsonObject& bandEntry,
 
     QByteArray iv = kBA.mid(0, 16);
     QByteArray keyAndMacKey = kBA.mid(iv.size(), 64);
-    SymmetricCipher cipher(SymmetricCipher::Aes256, SymmetricCipher::Cbc, SymmetricCipher::Decrypt);
-    if (!cipher.init(m_masterKey, iv)) {
+    SymmetricCipher cipher;
+    if (!cipher.init(SymmetricCipher::Aes256_CBC, SymmetricCipher::Decrypt, m_masterKey, iv)) {
         qCritical() << "Unable to init cipher using masterKey in UUID " << uuid;
         return false;
     }
-    if (!cipher.processInPlace(keyAndMacKey)) {
+    if (!cipher.process(keyAndMacKey)) {
         qCritical() << "Unable to decipher \"k\"(key+hmac) in UUID " << uuid;
         return false;
     }
@@ -112,9 +111,12 @@ Entry* OpVaultReader::processBandEntry(const QJsonObject& bandEntry, const QDir&
         return nullptr;
     }
 
-    const auto entry = new Entry();
+    QScopedPointer<Entry> entry(new Entry());
 
-    if (bandEntry.contains("category")) {
+    if (bandEntry.contains("trashed") && bandEntry["trashed"].toBool()) {
+        // Send this entry to the recycle bin
+        rootGroup->database()->recycleEntry(entry.data());
+    } else if (bandEntry.contains("category")) {
         const QJsonValue& categoryValue = bandEntry["category"];
         if (categoryValue.isString()) {
             bool found = false;
@@ -148,12 +150,12 @@ Entry* OpVaultReader::processBandEntry(const QJsonObject& bandEntry, const QDir&
     bool timeInfoOk = false;
     if (bandEntry.contains("created")) {
         auto createdTime = static_cast<uint>(bandEntry["created"].toInt());
-        ti.setCreationTime(QDateTime::fromTime_t(createdTime, Qt::UTC));
+        ti.setCreationTime(QDateTime::fromSecsSinceEpoch(createdTime, Qt::UTC));
         timeInfoOk = true;
     }
     if (bandEntry.contains("updated")) {
         auto updateTime = static_cast<uint>(bandEntry["updated"].toInt());
-        ti.setLastModificationTime(QDateTime::fromTime_t(updateTime, Qt::UTC));
+        ti.setLastModificationTime(QDateTime::fromSecsSinceEpoch(updateTime, Qt::UTC));
         timeInfoOk = true;
     }
     // "tx" is modified by sync, not by user; maybe a custom attribute?
@@ -162,8 +164,7 @@ Entry* OpVaultReader::processBandEntry(const QJsonObject& bandEntry, const QDir&
     }
     entry->setUuid(Tools::hexToUuid(uuid));
 
-    if (!fillAttributes(entry, bandEntry)) {
-        delete entry;
+    if (!fillAttributes(entry.data(), bandEntry)) {
         return nullptr;
     }
 
@@ -184,7 +185,7 @@ Entry* OpVaultReader::processBandEntry(const QJsonObject& bandEntry, const QDir&
         entry->setPassword(data.value("password").toString());
     }
 
-    for (const auto& fieldValue : data.value("fields").toArray()) {
+    for (const auto fieldValue : data.value("fields").toArray()) {
         if (!fieldValue.isObject()) {
             continue;
         }
@@ -208,11 +209,11 @@ Entry* OpVaultReader::processBandEntry(const QJsonObject& bandEntry, const QDir&
         }
         const QJsonObject& section = sectionValue.toObject();
 
-        fillFromSection(entry, section);
+        fillFromSection(entry.data(), section);
     }
 
-    fillAttachments(entry, attachmentDir, entryKey, entryHmacKey);
-    return entry;
+    fillAttachments(entry.data(), attachmentDir, entryKey, entryHmacKey);
+    return entry.take();
 }
 
 bool OpVaultReader::fillAttributes(Entry* entry, const QJsonObject& bandEntry)
@@ -225,9 +226,9 @@ bool OpVaultReader::fillAttributes(Entry* entry, const QJsonObject& bandEntry)
         return false;
     }
 
-    QByteArray overviewJsonBytes = entOver01.getClearText();
-    QJsonDocument overviewDoc = QJsonDocument::fromJson(overviewJsonBytes);
-    QJsonObject overviewJson = overviewDoc.object();
+    auto overviewJsonBytes = entOver01.getClearText();
+    auto overviewDoc = QJsonDocument::fromJson(overviewJsonBytes);
+    auto overviewJson = overviewDoc.object();
 
     QString title = overviewJson.value("title").toString();
     entry->setTitle(title);
@@ -236,26 +237,21 @@ bool OpVaultReader::fillAttributes(Entry* entry, const QJsonObject& bandEntry)
     entry->setUrl(url);
 
     int i = 1;
-    for (const auto& urlV : overviewJson["URLs"].toArray()) {
-        auto urlName = QString("URL_%1").arg(i);
-        auto urlValue = urlV.toString();
-        if (urlV.isObject()) {
-            const auto& urlObj = urlV.toObject();
-            if (urlObj["l"].isString() && urlObj["u"].isString()) {
-                urlName = urlObj["l"].toString();
-                urlValue = urlObj["u"].toString();
-            } else {
-                continue;
+    for (const auto urlV : overviewJson["URLs"].toArray()) {
+        const auto& urlObj = urlV.toObject();
+        if (urlObj.contains("u")) {
+            auto newUrl = urlObj["u"].toString();
+            if (newUrl != url) {
+                // Add this url if it isn't the base one
+                entry->attributes()->set(
+                    QString("%1_%2").arg(EntryAttributes::AdditionalUrlAttribute, QString::number(i)), newUrl);
+                ++i;
             }
-        }
-        if (!urlValue.isEmpty() && urlValue != url) {
-            entry->attributes()->set(urlName, urlValue);
-            ++i;
         }
     }
 
     QStringList tagsList;
-    for (const auto& tagV : overviewJson["tags"].toArray()) {
+    for (const auto tagV : overviewJson["tags"].toArray()) {
         if (tagV.isString()) {
             tagsList << tagV.toString();
         }

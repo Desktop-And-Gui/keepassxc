@@ -27,9 +27,7 @@ public:
     int executeWithDatabase(QSharedPointer<Database> db, QSharedPointer<QCommandLineParser> parser) override;
 
     static const QCommandLineOption HIBPDatabaseOption;
-
-private:
-    void printHibpFinding(const Entry* entry, int count, QTextStream& out);
+    static const QCommandLineOption OkonOption;
 };
 
 #endif // KEEPASSXC_HIBP_H

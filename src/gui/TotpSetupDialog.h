@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017 Weslly Honorato <﻿weslly@protonmail.com>
+ *  Copyright (C) 2017 Weslly Honorato <weslly@protonmail.com>
  *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -19,11 +19,10 @@
 #ifndef KEEPASSX_SETUPTOTPDIALOG_H
 #define KEEPASSX_SETUPTOTPDIALOG_H
 
-#include "core/Database.h"
-#include "core/Entry.h"
-#include "gui/DatabaseWidget.h"
 #include <QDialog>
-#include <QScopedPointer>
+
+#include "core/Database.h"
+#include "gui/DatabaseWidget.h"
 
 namespace Ui
 {

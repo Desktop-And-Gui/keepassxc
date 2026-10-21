@@ -1,7 +1,7 @@
 /*
- *  Copyright (C) 2013 Francois Ferrand
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2017 Sami Vänttinen <sami.vanttinen@protonmail.com>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2013 Francois Ferrand
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,12 +17,10 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef BROWSERSETTINGS_H
-#define BROWSERSETTINGS_H
+#ifndef KEEPASSXC_BROWSERSETTINGS_H
+#define KEEPASSXC_BROWSERSETTINGS_H
 
-#include "HostInstaller.h"
-#include "core/PassphraseGenerator.h"
-#include "core/PasswordGenerator.h"
+#include "NativeMessageInstaller.h"
 
 class BrowserSettings
 {
@@ -41,10 +39,6 @@ public:
     void setUnlockDatabase(bool unlockDatabase);
     bool matchUrlScheme();
     void setMatchUrlScheme(bool matchUrlScheme);
-    bool sortByUsername();
-    void setSortByUsername(bool sortByUsername = true);
-    bool sortByTitle();
-    void setSortByTitle(bool sortByUsertitle = true);
     bool alwaysAllowAccess();
     void setAlwaysAllowAccess(bool alwaysAllowAccess);
     bool alwaysAllowUpdate();
@@ -57,80 +51,42 @@ public:
     void setSupportKphFields(bool supportKphFields);
     bool noMigrationPrompt();
     void setNoMigrationPrompt(bool prompt);
+    bool allowLocalhostWithPasskeys();
+    void setAllowLocalhostWithPasskeys(bool enabled);
 
-    bool supportBrowserProxy();
-    void setSupportBrowserProxy(bool enabled);
     bool useCustomProxy();
     void setUseCustomProxy(bool enabled);
     QString customProxyLocation();
     void setCustomProxyLocation(const QString& location);
+    QString proxyLocation();
+    QString proxyLocationAsInstalled() const;
+#ifdef QT_DEBUG
+    QString customExtensionId();
+    void setCustomExtensionId(const QString& id);
+#endif
     bool updateBinaryPath();
     void setUpdateBinaryPath(bool enabled);
+    bool allowGetDatabaseEntriesRequest();
+    void setAllowGetDatabaseEntriesRequest(bool enabled);
     bool allowExpiredCredentials();
     void setAllowExpiredCredentials(bool enabled);
-    bool chromeSupport();
-    void setChromeSupport(bool enabled);
-    bool chromiumSupport();
-    void setChromiumSupport(bool enabled);
-    bool firefoxSupport();
-    void setFirefoxSupport(bool enabled);
-    bool vivaldiSupport();
-    void setVivaldiSupport(bool enabled);
-    bool braveSupport();
-    void setBraveSupport(bool enabled);
-    bool torBrowserSupport();
-    void setTorBrowserSupport(bool enabled);
 
-    bool passwordUseNumbers();
-    void setPasswordUseNumbers(bool useNumbers);
-    bool passwordUseLowercase();
-    void setPasswordUseLowercase(bool useLowercase);
-    bool passwordUseUppercase();
-    void setPasswordUseUppercase(bool useUppercase);
-    bool passwordUseSpecial();
-    void setPasswordUseSpecial(bool useSpecial);
-    bool passwordUseBraces();
-    void setPasswordUseBraces(bool useBraces);
-    bool passwordUsePunctuation();
-    void setPasswordUsePunctuation(bool usePunctuation);
-    bool passwordUseQuotes();
-    void setPasswordUseQuotes(bool useQuotes);
-    bool passwordUseDashes();
-    void setPasswordUseDashes(bool useDashes);
-    bool passwordUseMath();
-    void setPasswordUseMath(bool useMath);
-    bool passwordUseLogograms();
-    void setPasswordUseLogograms(bool useLogograms);
-    bool passwordUseEASCII();
-    void setPasswordUseEASCII(bool useEASCII);
-    bool advancedMode();
-    void setAdvancedMode(bool advancedMode);
-    QString passwordExcludedChars();
-    void setPasswordExcludedChars(const QString& chars);
-    int passPhraseWordCount();
-    void setPassPhraseWordCount(int wordCount);
-    QString passPhraseWordSeparator();
-    void setPassPhraseWordSeparator(const QString& separator);
-    int generatorType();
-    void setGeneratorType(int type);
-    bool passwordEveryGroup();
-    void setPasswordEveryGroup(bool everyGroup);
-    bool passwordExcludeAlike();
-    void setPasswordExcludeAlike(bool excludeAlike);
-    int passwordLength();
-    void setPasswordLength(int length);
-    PasswordGenerator::CharClasses passwordCharClasses();
-    PasswordGenerator::GeneratorFlags passwordGeneratorFlags();
-    QJsonObject generatePassword();
-    void updateBinaryPaths(const QString& customProxyLocation = QString());
-    bool checkIfProxyExists(QString& path);
+    bool browserSupport(BrowserShared::SupportedBrowsers browser);
+    void setBrowserSupport(BrowserShared::SupportedBrowsers browser, bool enabled);
+    bool customBrowserSupport();
+    void setCustomBrowserSupport(bool enabled);
+    int customBrowserType();
+    void setCustomBrowserType(int type);
+    QString customBrowserLocation();
+    void setCustomBrowserLocation(const QString& location);
+    void updateBinaryPaths();
+    QString replaceHomePath(QString location);
+    QString replaceTildeHomePath(QString location);
 
 private:
     static BrowserSettings* m_instance;
 
-    PasswordGenerator m_passwordGenerator;
-    PassphraseGenerator m_passPhraseGenerator;
-    HostInstaller m_hostInstaller;
+    NativeMessageInstaller m_nativeMessageInstaller;
 };
 
 inline BrowserSettings* browserSettings()
@@ -138,4 +94,4 @@ inline BrowserSettings* browserSettings()
     return BrowserSettings::instance();
 }
 
-#endif // BROWSERSETTINGS_H
+#endif // KEEPASSXC_BROWSERSETTINGS_H

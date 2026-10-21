@@ -16,7 +16,6 @@
  */
 
 #include "TestKdbx3.h"
-#include "TestGlobal.h"
 
 #include "config-keepassx-tests.h"
 #include "core/Metadata.h"
@@ -26,11 +25,14 @@
 #include "format/KeePass2Reader.h"
 #include "format/KeePass2Writer.h"
 #include "keys/PasswordKey.h"
+#include <QTest>
 
 QTEST_GUILESS_MAIN(TestKdbx3)
 
 void TestKdbx3::initTestCaseImpl()
 {
+    m_xmlDb->changeKdf(fastKdf(KeePass2::uuidToKdf(KeePass2::KDF_AES_KDBX3)));
+    m_kdbxSourceDb->changeKdf(fastKdf(KeePass2::uuidToKdf(KeePass2::KDF_AES_KDBX3)));
 }
 
 QSharedPointer<Database> TestKdbx3::readXml(const QString& path, bool strictMode, bool& hasError, QString& errorString)
@@ -73,22 +75,7 @@ void TestKdbx3::readKdbx(QIODevice* device,
     if (hasError) {
         errorString = reader.errorString();
     }
-    QCOMPARE(reader.version(), KeePass2::FILE_VERSION_3_1 & KeePass2::FILE_VERSION_CRITICAL_MASK);
-}
-
-void TestKdbx3::readKdbx(const QString& path,
-                         QSharedPointer<const CompositeKey> key,
-                         QSharedPointer<Database> db,
-                         bool& hasError,
-                         QString& errorString)
-{
-    KeePass2Reader reader;
-    reader.readDatabase(path, key, db.data());
-    hasError = reader.hasError();
-    if (hasError) {
-        errorString = reader.errorString();
-    }
-    QCOMPARE(reader.version(), KeePass2::FILE_VERSION_3_1 & KeePass2::FILE_VERSION_CRITICAL_MASK);
+    QCOMPARE(reader.version(), KeePass2::FILE_VERSION_3_1);
 }
 
 void TestKdbx3::writeKdbx(QIODevice* device, Database* db, bool& hasError, QString& errorString)
@@ -125,7 +112,7 @@ void TestKdbx3::testNonAscii()
     key->addKey(QSharedPointer<PasswordKey>::create(QString::fromUtf8("\xce\x94\xc3\xb6\xd8\xb6")));
     KeePass2Reader reader;
     auto db = QSharedPointer<Database>::create();
-    QVERIFY(db->open(filename, key, nullptr, false));
+    QVERIFY(db->open(filename, key, nullptr));
     QVERIFY(db.data());
     QVERIFY(!reader.hasError());
     QCOMPARE(db->metadata()->name(), QString("NonAsciiTest"));
@@ -139,7 +126,7 @@ void TestKdbx3::testCompressed()
     key->addKey(QSharedPointer<PasswordKey>::create(""));
     KeePass2Reader reader;
     auto db = QSharedPointer<Database>::create();
-    QVERIFY(db->open(filename, key, nullptr, false));
+    QVERIFY(db->open(filename, key, nullptr));
     QVERIFY(db.data());
     QVERIFY(!reader.hasError());
     QCOMPARE(db->metadata()->name(), QString("Compressed"));
@@ -153,7 +140,7 @@ void TestKdbx3::testProtectedStrings()
     key->addKey(QSharedPointer<PasswordKey>::create("masterpw"));
     KeePass2Reader reader;
     auto db = QSharedPointer<Database>::create();
-    QVERIFY(db->open(filename, key, nullptr, false));
+    QVERIFY(db->open(filename, key, nullptr));
     QVERIFY(db.data());
     QVERIFY(!reader.hasError());
     QCOMPARE(db->metadata()->name(), QString("Protected Strings Test"));
@@ -180,5 +167,90 @@ void TestKdbx3::testBrokenHeaderHash()
     auto key = QSharedPointer<CompositeKey>::create();
     key->addKey(QSharedPointer<PasswordKey>::create(""));
     auto db = QSharedPointer<Database>::create();
-    QVERIFY(!db->open(filename, key, nullptr, false));
+    QVERIFY(!db->open(filename, key, nullptr));
+}
+
+void TestKdbx3::testAttachmentIndexStability()
+{
+    QScopedPointer<Database> db(new Database());
+    db->changeKdf(fastKdf(KeePass2::uuidToKdf(KeePass2::KDF_AES_KDBX3)));
+    auto compositeKey = QSharedPointer<CompositeKey>::create();
+    db->setKey(compositeKey);
+    QVERIFY(!db->uuid().isNull());
+
+    auto root = db->rootGroup();
+
+    auto group1 = new Group();
+    group1->setUuid(QUuid::createUuid());
+    QVERIFY(!group1->uuid().isNull());
+    group1->setParent(root);
+
+    auto attachment1 = QByteArray("qwerty");
+    auto attachment2 = QByteArray("asdf");
+    auto attachment3 = QByteArray("zxcv");
+
+    auto entry1 = new Entry();
+    entry1->setUuid(QUuid::createUuid());
+    QVERIFY(!entry1->uuid().isNull());
+    auto uuid1 = entry1->uuid();
+    entry1->attachments()->set("a", attachment1);
+    QCOMPARE(entry1->attachments()->keys().size(), 1);
+    QCOMPARE(entry1->attachments()->values().size(), 1);
+    entry1->setGroup(root);
+
+    auto entry2 = new Entry();
+    entry2->setUuid(QUuid::createUuid());
+    QVERIFY(!entry2->uuid().isNull());
+    auto uuid2 = entry2->uuid();
+    entry2->attachments()->set("a", attachment1);
+    entry2->attachments()->set("b", attachment2);
+    QCOMPARE(entry2->attachments()->keys().size(), 2);
+    QCOMPARE(entry2->attachments()->values().size(), 2);
+    entry2->setGroup(group1);
+
+    auto entry3 = new Entry();
+    entry3->setUuid(QUuid::createUuid());
+    QVERIFY(!entry3->uuid().isNull());
+    auto uuid3 = entry3->uuid();
+    entry3->attachments()->set("a", attachment1);
+    entry3->attachments()->set("b", attachment2);
+    entry3->attachments()->set("x", attachment3);
+    entry3->attachments()->set("y", attachment3);
+    QCOMPARE(entry3->attachments()->keys().size(), 4);
+    QCOMPARE(entry3->attachments()->values().size(), 3);
+    entry3->setGroup(group1);
+
+    QBuffer buffer;
+    buffer.open(QBuffer::ReadWrite);
+    KeePass2Writer writer;
+    QVERIFY(writer.writeDatabase(&buffer, db.data()));
+    QCOMPARE(writer.version(), KeePass2::FILE_VERSION_3_1);
+
+    buffer.seek(0);
+    KeePass2Reader reader;
+
+    // Re-read database and check that all attachments are still correctly assigned
+    auto db2 = QSharedPointer<Database>::create();
+    reader.readDatabase(&buffer, QSharedPointer<CompositeKey>::create(), db2.data());
+    QVERIFY(!reader.hasError());
+    QVERIFY(!db->uuid().isNull());
+
+    auto a1 = db2->rootGroup()->findEntryByUuid(uuid1)->attachments();
+    QCOMPARE(a1->keys().size(), 1);
+    QCOMPARE(a1->values().size(), 1);
+    QCOMPARE(a1->value("a"), attachment1);
+
+    auto a2 = db2->rootGroup()->findEntryByUuid(uuid2)->attachments();
+    QCOMPARE(a2->keys().size(), 2);
+    QCOMPARE(a2->values().size(), 2);
+    QCOMPARE(a2->value("a"), attachment1);
+    QCOMPARE(a2->value("b"), attachment2);
+
+    auto a3 = db2->rootGroup()->findEntryByUuid(uuid3)->attachments();
+    QCOMPARE(a3->keys().size(), 4);
+    QCOMPARE(a3->values().size(), 3);
+    QCOMPARE(a3->value("a"), attachment1);
+    QCOMPARE(a3->value("b"), attachment2);
+    QCOMPARE(a3->value("x"), attachment3);
+    QCOMPARE(a3->value("y"), attachment3);
 }

@@ -15,20 +15,17 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cstdio>
-#include <cstdlib>
-#include <utility>
-
-#include <QMap>
-
-#include "Command.h"
-
 #include "Add.h"
 #include "AddGroup.h"
 #include "Analyze.h"
+#include "AttachmentExport.h"
+#include "AttachmentImport.h"
+#include "AttachmentRemove.h"
 #include "Clip.h"
 #include "Close.h"
-#include "Create.h"
+#include "DatabaseCreate.h"
+#include "DatabaseEdit.h"
+#include "DatabaseInfo.h"
 #include "Diceware.h"
 #include "Edit.h"
 #include "Estimate.h"
@@ -38,15 +35,18 @@
 #include "Help.h"
 #include "Import.h"
 #include "List.h"
-#include "Locate.h"
 #include "Merge.h"
 #include "Move.h"
 #include "Open.h"
 #include "Remove.h"
 #include "RemoveGroup.h"
+#include "Search.h"
 #include "Show.h"
-#include "TextStream.h"
 #include "Utils.h"
+
+#include <QCommandLineParser>
+#include <QFileInfo>
+#include <QRegularExpression>
 
 const QCommandLineOption Command::HelpOption = QCommandLineOption(QStringList()
 #ifdef Q_OS_WIN
@@ -56,12 +56,10 @@ const QCommandLineOption Command::HelpOption = QCommandLineOption(QStringList()
                                                                   QObject::tr("Display this help."));
 
 const QCommandLineOption Command::QuietOption =
-    QCommandLineOption(QStringList() << "q"
-                                     << "quiet",
+    QCommandLineOption(QStringList() << "q" << "quiet",
                        QObject::tr("Silence password prompt and other secondary outputs."));
 
-const QCommandLineOption Command::KeyFileOption = QCommandLineOption(QStringList() << "k"
-                                                                                   << "key-file",
+const QCommandLineOption Command::KeyFileOption = QCommandLineOption(QStringList() << "k" << "key-file",
                                                                      QObject::tr("Key file of the database."),
                                                                      QObject::tr("path"));
 
@@ -69,10 +67,9 @@ const QCommandLineOption Command::NoPasswordOption =
     QCommandLineOption(QStringList() << "no-password", QObject::tr("Deactivate password key for the database."));
 
 const QCommandLineOption Command::YubiKeyOption =
-    QCommandLineOption(QStringList() << "y"
-                                     << "yubikey",
-                       QObject::tr("Yubikey slot used to encrypt the database."),
-                       QObject::tr("slot"));
+    QCommandLineOption(QStringList() << "y" << "yubikey",
+                       QObject::tr("Yubikey slot and optional serial used to access the database (e.g., 1:7370001)."),
+                       QObject::tr("slot[:serial]"));
 
 namespace
 {
@@ -103,15 +100,13 @@ Command::Command()
     options.append(Command::QuietOption);
 }
 
-Command::~Command()
-{
-}
+Command::~Command() = default;
 
 QString Command::getDescriptionLine()
 {
     QString response = name;
     QString space(" ");
-    QString spaces = space.repeated(15 - name.length());
+    QString spaces = space.repeated(20 - name.length());
     response = response.append(spaces);
     response = response.append(description);
     response = response.append("\n");
@@ -120,29 +115,39 @@ QString Command::getDescriptionLine()
 
 QString Command::getHelpText()
 {
-    return buildParser(this)->helpText().replace("[options]", name + " [options]");
+    auto help = buildParser(this)->helpText();
+    // Fix spacing of options parameter
+    help.replace(QStringLiteral("[options]"), name + QStringLiteral(" [options]"));
+    // Remove application directory from command line example
+    auto appname = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
+    auto regex = QRegularExpression(QStringLiteral(" .*%1").arg(QRegularExpression::escape(appname)));
+    help.replace(regex, appname.prepend(" "));
+
+    return help;
 }
 
 QSharedPointer<QCommandLineParser> Command::getCommandLineParser(const QStringList& arguments)
 {
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    auto& err = Utils::STDERR;
     QSharedPointer<QCommandLineParser> parser = buildParser(this);
 
     if (!parser->parse(arguments)) {
-        errorTextStream << parser->errorText() << "\n\n";
-        errorTextStream << getHelpText();
+        err << parser->errorText() << "\n\n";
+        err << getHelpText();
         return {};
     }
     if (parser->positionalArguments().size() < positionalArguments.size()) {
-        errorTextStream << getHelpText();
+        err << QObject::tr("Missing positional argument(s).") << "\n\n";
+        err << getHelpText();
         return {};
     }
     if (parser->positionalArguments().size() > (positionalArguments.size() + optionalArguments.size())) {
-        errorTextStream << getHelpText();
+        err << QObject::tr("Too many arguments provided.") << "\n\n";
+        err << getHelpText();
         return {};
     }
     if (parser->isSet(HelpOption)) {
-        errorTextStream << getHelpText();
+        err << getHelpText();
         return {};
     }
     return parser;
@@ -158,15 +163,19 @@ namespace Commands
 
         s_commands.insert(QStringLiteral("add"), QSharedPointer<Command>(new Add()));
         s_commands.insert(QStringLiteral("analyze"), QSharedPointer<Command>(new Analyze()));
+        s_commands.insert(QStringLiteral("attachment-export"), QSharedPointer<Command>(new AttachmentExport()));
+        s_commands.insert(QStringLiteral("attachment-import"), QSharedPointer<Command>(new AttachmentImport()));
+        s_commands.insert(QStringLiteral("attachment-rm"), QSharedPointer<Command>(new AttachmentRemove()));
         s_commands.insert(QStringLiteral("clip"), QSharedPointer<Command>(new Clip()));
         s_commands.insert(QStringLiteral("close"), QSharedPointer<Command>(new Close()));
-        s_commands.insert(QStringLiteral("create"), QSharedPointer<Command>(new Create()));
+        s_commands.insert(QStringLiteral("db-create"), QSharedPointer<Command>(new DatabaseCreate()));
+        s_commands.insert(QStringLiteral("db-edit"), QSharedPointer<Command>(new DatabaseEdit()));
+        s_commands.insert(QStringLiteral("db-info"), QSharedPointer<Command>(new DatabaseInfo()));
         s_commands.insert(QStringLiteral("diceware"), QSharedPointer<Command>(new Diceware()));
         s_commands.insert(QStringLiteral("edit"), QSharedPointer<Command>(new Edit()));
         s_commands.insert(QStringLiteral("estimate"), QSharedPointer<Command>(new Estimate()));
         s_commands.insert(QStringLiteral("generate"), QSharedPointer<Command>(new Generate()));
         s_commands.insert(QStringLiteral("help"), QSharedPointer<Command>(new Help()));
-        s_commands.insert(QStringLiteral("locate"), QSharedPointer<Command>(new Locate()));
         s_commands.insert(QStringLiteral("ls"), QSharedPointer<Command>(new List()));
         s_commands.insert(QStringLiteral("merge"), QSharedPointer<Command>(new Merge()));
         s_commands.insert(QStringLiteral("mkdir"), QSharedPointer<Command>(new AddGroup()));
@@ -174,6 +183,7 @@ namespace Commands
         s_commands.insert(QStringLiteral("open"), QSharedPointer<Command>(new Open()));
         s_commands.insert(QStringLiteral("rm"), QSharedPointer<Command>(new Remove()));
         s_commands.insert(QStringLiteral("rmdir"), QSharedPointer<Command>(new RemoveGroup()));
+        s_commands.insert(QStringLiteral("search"), QSharedPointer<Command>(new Search()));
         s_commands.insert(QStringLiteral("show"), QSharedPointer<Command>(new Show()));
 
         if (interactive) {

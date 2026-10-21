@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,6 +16,8 @@
  */
 #include "Clock.h"
 
+#include <QLocale>
+
 QSharedPointer<Clock> Clock::m_instance;
 
 QDateTime Clock::currentDateTimeUtc()
@@ -30,8 +32,12 @@ QDateTime Clock::currentDateTime()
 
 uint Clock::currentSecondsSinceEpoch()
 {
-    // TODO: change to toSecsSinceEpoch() when min Qt >= 5.8
-    return instance().currentDateTimeImpl().toTime_t();
+    return instance().currentDateTimeImpl().toSecsSinceEpoch();
+}
+
+qint64 Clock::currentMilliSecondsSinceEpoch()
+{
+    return instance().currentDateTimeImpl().toMSecsSinceEpoch();
 }
 
 QDateTime Clock::serialized(const QDateTime& dateTime)
@@ -45,12 +51,12 @@ QDateTime Clock::serialized(const QDateTime& dateTime)
 
 QDateTime Clock::datetimeUtc(int year, int month, int day, int hour, int min, int second)
 {
-    return QDateTime(QDate(year, month, day), QTime(hour, min, second), Qt::UTC);
+    return {QDate(year, month, day), QTime(hour, min, second), Qt::UTC};
 }
 
 QDateTime Clock::datetime(int year, int month, int day, int hour, int min, int second)
 {
-    return QDateTime(QDate(year, month, day), QTime(hour, min, second), Qt::LocalTime);
+    return {QDate(year, month, day), QTime(hour, min, second), Qt::LocalTime};
 }
 
 QDateTime Clock::datetimeUtc(qint64 msecSinceEpoch)
@@ -73,13 +79,15 @@ QDateTime Clock::parse(const QString& text, const QString& format)
     return QDateTime::fromString(text, format);
 }
 
-Clock::~Clock()
+QString Clock::toString(const QDateTime& dateTime)
 {
+    static QLocale locale;
+    return locale.toString(dateTime, QLocale::ShortFormat);
 }
 
-Clock::Clock()
-{
-}
+Clock::~Clock() = default;
+
+Clock::Clock() = default;
 
 QDateTime Clock::currentDateTimeUtcImpl() const
 {

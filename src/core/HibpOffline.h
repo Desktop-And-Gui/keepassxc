@@ -18,9 +18,9 @@
 #ifndef KEEPASSXC_HIBPOFFLINE_H
 #define KEEPASSXC_HIBPOFFLINE_H
 
-#include <QIODevice>
-#include <QList>
-#include <QPair>
+#include <QSharedPointer>
+
+class QIODevice;
 
 class Database;
 class Entry;
@@ -31,6 +31,12 @@ namespace HibpOffline
                 QIODevice& hibpInput,
                 QList<QPair<const Entry*, int>>& findings,
                 QString* error);
-}
+
+    bool okonReport(QSharedPointer<Database> db,
+                    const QString& okon,
+                    const QString& okonDatabase,
+                    QList<QPair<const Entry*, int>>& findings,
+                    QString* error);
+} // namespace HibpOffline
 
 #endif // KEEPASSXC_HIBPOFFLINE_H

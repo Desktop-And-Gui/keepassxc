@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2012 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2019 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,21 +18,21 @@
 
 #include "EntryURLModel.h"
 
-#include "core/Entry.h"
-#include "core/Tools.h"
-
-#include <algorithm>
+#include "browser/BrowserService.h"
+#include "core/EntryAttributes.h"
+#include "gui/Icons.h"
+#include "gui/UrlTools.h"
+#include "gui/styles/StateColorPalette.h"
 
 EntryURLModel::EntryURLModel(QObject* parent)
     : QStandardItemModel(parent)
     , m_entryAttributes(nullptr)
+    , m_errorIcon(icons()->icon("dialog-error"))
 {
 }
 
 void EntryURLModel::setEntryAttributes(EntryAttributes* entryAttributes)
 {
-    beginResetModel();
-
     if (m_entryAttributes) {
         m_entryAttributes->disconnect(this);
     }
@@ -48,9 +48,50 @@ void EntryURLModel::setEntryAttributes(EntryAttributes* entryAttributes)
         connect(m_entryAttributes, SIGNAL(renamed(QString,QString)), SLOT(updateAttributes()));
         connect(m_entryAttributes, SIGNAL(reset()), SLOT(updateAttributes()));
         // clang-format on
+    } else {
+        clear();
+    }
+}
+
+QVariant EntryURLModel::data(const QModelIndex& index, int role) const
+{
+    if (!index.isValid()) {
+        return {};
     }
 
-    endResetModel();
+    const auto key = keyByIndex(index);
+    if (key.isEmpty()) {
+        return {};
+    }
+
+    const auto value = m_entryAttributes->value(key);
+    const auto urlValid = UrlTools::isUrlValid(value, true);
+
+    // Check for duplicate URLs in the attribute list. Excludes the current key/value from the comparison.
+    auto customAttributeKeys = m_entryAttributes->customKeys().filter(EntryAttributes::AdditionalUrlAttribute);
+    customAttributeKeys.removeOne(key);
+
+    const auto duplicateUrl =
+        m_entryAttributes->values(customAttributeKeys).contains(value) || UrlTools::isUrlIdentical(value, m_entryUrl);
+    if (role == Qt::BackgroundRole && (!urlValid || duplicateUrl)) {
+        StateColorPalette statePalette;
+        return statePalette.color(StateColorPalette::ColorRole::Error);
+    } else if (role == Qt::DecorationRole && (!urlValid || duplicateUrl)) {
+        return m_errorIcon;
+    } else if (role == Qt::DisplayRole || role == Qt::EditRole) {
+        return value;
+    } else if (role == Qt::ToolTipRole && duplicateUrl) {
+        return tr("Duplicate URL");
+    } else if (role == Qt::ToolTipRole && !urlValid) {
+        return tr("Invalid URL");
+    }
+
+    return {};
+}
+
+void EntryURLModel::setEntryUrl(const QString& entryUrl)
+{
+    m_entryUrl = entryUrl;
 }
 
 bool EntryURLModel::setData(const QModelIndex& index, const QVariant& value, int role)
@@ -59,11 +100,10 @@ bool EntryURLModel::setData(const QModelIndex& index, const QVariant& value, int
         return false;
     }
 
-    const int row = index.row();
-    const QString key = m_urls.at(row).first;
-    const QString oldValue = m_urls.at(row).second;
+    const auto row = index.row();
+    const auto key = m_urls.at(row).first;
 
-    if (EntryAttributes::isDefaultAttribute(key) || m_entryAttributes->containsValue(value.toString())) {
+    if (EntryAttributes::isDefaultAttribute(key)) {
         return false;
     }
 
@@ -84,7 +124,7 @@ QModelIndex EntryURLModel::indexByKey(const QString& key) const
     }
 
     if (row == -1) {
-        return QModelIndex();
+        return {};
     } else {
         return index(row, 0);
     }
@@ -93,7 +133,7 @@ QModelIndex EntryURLModel::indexByKey(const QString& key) const
 QString EntryURLModel::keyByIndex(const QModelIndex& index) const
 {
     if (!index.isValid()) {
-        return QString();
+        return {};
     } else {
         return m_urls.at(index.row()).first;
     }
@@ -104,9 +144,9 @@ void EntryURLModel::updateAttributes()
     clear();
     m_urls.clear();
 
-    const QList<QString> attributesKeyList = m_entryAttributes->keys();
-    for (const QString& key : attributesKeyList) {
-        if (!EntryAttributes::isDefaultAttribute(key) && key.contains("KP2A_URL")) {
+    const auto attributesKeyList = m_entryAttributes->keys();
+    for (const auto& key : attributesKeyList) {
+        if (!EntryAttributes::isDefaultAttribute(key) && key.contains(EntryAttributes::AdditionalUrlAttribute)) {
             const auto value = m_entryAttributes->value(key);
             m_urls.append(qMakePair(key, value));
 

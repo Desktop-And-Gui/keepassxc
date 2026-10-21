@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -23,6 +23,9 @@
 
 #include "Base32.h"
 
+#include <QHash>
+#include <QVariant>
+
 constexpr quint64 MASK_40BIT = quint64(0xF8) << 32;
 constexpr quint64 MASK_35BIT = quint64(0x7C0000000);
 constexpr quint64 MASK_25BIT = quint64(0x1F00000);
@@ -40,21 +43,21 @@ constexpr quint8 ASCII_a = static_cast<quint8>('a');
 constexpr quint8 ASCII_z = static_cast<quint8>('z');
 constexpr quint8 ASCII_EQ = static_cast<quint8>('=');
 
-QVariant Base32::decode(const QByteArray& encodedData)
+QByteArray Base32::decode(const QByteArray& encodedData)
 {
     if (encodedData.size() <= 0) {
-        return QVariant::fromValue(QByteArray(""));
+        return {};
     }
 
     if (encodedData.size() % 8 != 0) {
-        return QVariant();
+        return {};
     }
 
+    // Count the trailing run of pad characters only; a '=' anywhere else is
+    // not padding and is rejected below.
     int nPads = 0;
-    for (int i = -1; i > -7; --i) {
-        if ('=' == encodedData[encodedData.size() + i]) {
-            ++nPads;
-        }
+    while (nPads < encodedData.size() && '=' == encodedData[encodedData.size() - nPads - 1]) {
+        ++nPads;
     }
 
     int specialOffset;
@@ -77,9 +80,13 @@ QVariant Base32::decode(const QByteArray& encodedData)
         nSpecialBytes = 1;
         specialOffset = 2;
         break;
-    default:
+    case 0:
         nSpecialBytes = 0;
         specialOffset = 0;
+        break;
+    default:
+        // RFC 4648 only allows 1, 3, 4 or 6 pad characters
+        return {};
     }
 
     Q_ASSERT(encodedData.size() > 0);
@@ -108,6 +115,10 @@ QVariant Base32::decode(const QByteArray& encodedData)
                     ch += ALPH_POS_2;
                 } else {
                     if (ASCII_EQ == ch) {
+                        if (i <= encodedData.size() - nPads) {
+                            // '=' outside the trailing run of pad characters
+                            return {};
+                        }
                         if (i == encodedData.size()) {
                             // finished with special quantum
                             quantum >>= specialOffset;
@@ -116,7 +127,7 @@ QVariant Base32::decode(const QByteArray& encodedData)
                         continue;
                     } else {
                         // illegal character
-                        return QVariant();
+                        return {};
                     }
                 }
             }
@@ -136,13 +147,13 @@ QVariant Base32::decode(const QByteArray& encodedData)
     Q_ASSERT(encodedData.size() == i);
     Q_ASSERT(nBytes == o);
 
-    return QVariant::fromValue(data);
+    return data;
 }
 
 QByteArray Base32::encode(const QByteArray& data)
 {
     if (data.size() < 1) {
-        return QByteArray();
+        return {};
     }
 
     const int nBits = data.size() * 8;

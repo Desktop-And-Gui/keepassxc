@@ -17,7 +17,8 @@
 #ifndef KEEPASSXC_SHAREEXPORT_H
 #define KEEPASSXC_SHAREEXPORT_H
 
-#include "keeshare/KeeShareSettings.h"
+#include <QCoreApplication>
+
 #include "keeshare/ShareObserver.h"
 
 class Database;

@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2018 Aetf <aetf@unlimitedcodeworks.xyz>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -18,23 +19,8 @@
 #include "FdoSecretsSettings.h"
 
 #include "core/Config.h"
-#include "core/CustomData.h"
 #include "core/Database.h"
 #include "core/Metadata.h"
-
-namespace Keys
-{
-
-    constexpr auto FdoSecretsEnabled = "FdoSecrets/Enabled";
-    constexpr auto FdoSecretsShowNotification = "FdoSecrets/ShowNotification";
-    constexpr auto FdoSecretsNoConfirmDeleteItem = "FdoSecrets/NoConfirmDeleteItem";
-
-    namespace Db
-    {
-        constexpr auto FdoSecretsExposedGroup = "FDO_SECRETS_EXPOSED_GROUP";
-    } // namespace Db
-
-} // namespace Keys
 
 namespace FdoSecrets
 {
@@ -51,32 +37,52 @@ namespace FdoSecrets
 
     bool FdoSecretsSettings::isEnabled() const
     {
-        return config()->get(Keys::FdoSecretsEnabled, false).toBool();
+        return config()->get(Config::FdoSecrets_Enabled).toBool();
     }
 
     void FdoSecretsSettings::setEnabled(bool enabled)
     {
-        config()->set(Keys::FdoSecretsEnabled, enabled);
+        config()->set(Config::FdoSecrets_Enabled, enabled);
     }
 
     bool FdoSecretsSettings::showNotification() const
     {
-        return config()->get(Keys::FdoSecretsShowNotification, true).toBool();
+        return config()->get(Config::FdoSecrets_ShowNotification).toBool();
     }
 
     void FdoSecretsSettings::setShowNotification(bool show)
     {
-        config()->set(Keys::FdoSecretsShowNotification, show);
+        config()->set(Config::FdoSecrets_ShowNotification, show);
     }
 
-    bool FdoSecretsSettings::noConfirmDeleteItem() const
+    bool FdoSecretsSettings::confirmDeleteItem() const
     {
-        return config()->get(Keys::FdoSecretsNoConfirmDeleteItem, false).toBool();
+        return config()->get(Config::FdoSecrets_ConfirmDeleteItem).toBool();
     }
 
-    void FdoSecretsSettings::setNoConfirmDeleteItem(bool noConfirm)
+    void FdoSecretsSettings::setConfirmDeleteItem(bool confirm)
     {
-        config()->set(Keys::FdoSecretsNoConfirmDeleteItem, noConfirm);
+        config()->set(Config::FdoSecrets_ConfirmDeleteItem, confirm);
+    }
+
+    bool FdoSecretsSettings::confirmAccessItem() const
+    {
+        return config()->get(Config::FdoSecrets_ConfirmAccessItem).toBool();
+    }
+
+    void FdoSecretsSettings::setConfirmAccessItem(bool confirmAccessItem)
+    {
+        config()->set(Config::FdoSecrets_ConfirmAccessItem, confirmAccessItem);
+    }
+
+    bool FdoSecretsSettings::unlockBeforeSearch() const
+    {
+        return config()->get(Config::FdoSecrets_UnlockBeforeSearch).toBool();
+    }
+
+    void FdoSecretsSettings::setUnlockBeforeSearch(bool unlockBeforeSearch)
+    {
+        config()->set(Config::FdoSecrets_UnlockBeforeSearch, unlockBeforeSearch);
     }
 
     QUuid FdoSecretsSettings::exposedGroup(const QSharedPointer<Database>& db) const
@@ -84,20 +90,19 @@ namespace FdoSecrets
         return exposedGroup(db.data());
     }
 
-    void FdoSecretsSettings::setExposedGroup(const QSharedPointer<Database>& db,
-                                             const QUuid& group) // clazy:exclude=function-args-by-value
+    void FdoSecretsSettings::setExposedGroup(const QSharedPointer<Database>& db, const QUuid& group)
     {
         setExposedGroup(db.data(), group);
     }
 
     QUuid FdoSecretsSettings::exposedGroup(Database* db) const
     {
-        return {db->metadata()->customData()->value(Keys::Db::FdoSecretsExposedGroup)};
+        return QUuid(db->metadata()->customData()->value(CustomData::FdoSecretsExposedGroup));
     }
 
-    void FdoSecretsSettings::setExposedGroup(Database* db, const QUuid& group) // clazy:exclude=function-args-by-value
+    void FdoSecretsSettings::setExposedGroup(Database* db, const QUuid& group)
     {
-        db->metadata()->customData()->set(Keys::Db::FdoSecretsExposedGroup, group.toString());
+        db->metadata()->customData()->set(CustomData::FdoSecretsExposedGroup, group.toString());
     }
 
 } // namespace FdoSecrets

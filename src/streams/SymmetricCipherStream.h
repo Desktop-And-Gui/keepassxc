@@ -29,12 +29,10 @@ class SymmetricCipherStream : public LayeredStream
     Q_OBJECT
 
 public:
-    SymmetricCipherStream(QIODevice* baseDevice,
-                          SymmetricCipher::Algorithm algo,
-                          SymmetricCipher::Mode mode,
-                          SymmetricCipher::Direction direction);
-    ~SymmetricCipherStream();
-    bool init(const QByteArray& key, const QByteArray& iv);
+    SymmetricCipherStream(QIODevice* baseDevice);
+    ~SymmetricCipherStream() override;
+    bool
+    init(SymmetricCipher::Mode mode, SymmetricCipher::Direction direction, const QByteArray& key, const QByteArray& iv);
     bool open(QIODevice::OpenMode mode) override;
     bool reset() override;
     void close() override;

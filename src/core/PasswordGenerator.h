@@ -19,8 +19,7 @@
 #ifndef KEEPASSX_PASSWORDGENERATOR_H
 #define KEEPASSX_PASSWORDGENERATOR_H
 
-#include <QFlags>
-#include <QString>
+#include <QObject>
 #include <QVector>
 
 typedef QVector<QChar> PasswordGroup;
@@ -30,6 +29,7 @@ class PasswordGenerator
 public:
     enum CharClass
     {
+        NoClass = 0,
         LowerLetters = (1 << 0),
         UpperLetters = (1 << 1),
         Numbers = (1 << 2),
@@ -43,10 +43,11 @@ public:
         EASCII = (1 << 9),
         DefaultCharset = LowerLetters | UpperLetters | Numbers
     };
-    Q_DECLARE_FLAGS(CharClasses, CharClass)
+    Q_DECLARE_FLAGS(CharClasses, CharClass);
 
     enum GeneratorFlag
     {
+        NoFlags = 0,
         ExcludeLookAlike = (1 << 0),
         CharFromEveryGroup = (1 << 1),
         AdvancedMode = (1 << 2),
@@ -57,32 +58,28 @@ public:
 public:
     PasswordGenerator();
 
-    double estimateEntropy(const QString& password);
+    void loadSettingsFromConfig();
     void setLength(int length);
-    void setCharClasses(const CharClasses& classes);
     void setFlags(const GeneratorFlags& flags);
-    void setExcludedChars(const QString& chars);
+    void setCharClasses(const CharClasses& classes);
+    void setCustomCharacterSet(const QString& customCharacterSet);
+    void setExcludedCharacterSet(const QString& excludedCharacterSet);
+    void reset();
 
     bool isValid() const;
+    int getMinLength() const;
+
+    int getLength() const;
+    const GeneratorFlags& getFlags() const;
+    const CharClasses& getActiveClasses() const;
+    const QString& getCustomCharacterSet() const;
+    const QString& getExcludedCharacterSet() const;
 
     QString generatePassword() const;
 
-    static const int DefaultLength = 16;
+    static const int DefaultLength;
+    static const char* DefaultCustomCharacterSet;
     static const char* DefaultExcludedChars;
-    static constexpr bool DefaultLower = (DefaultCharset & LowerLetters) != 0;
-    static constexpr bool DefaultUpper = (DefaultCharset & UpperLetters) != 0;
-    static constexpr bool DefaultNumbers = (DefaultCharset & Numbers) != 0;
-    static constexpr bool DefaultSpecial = (DefaultCharset & SpecialCharacters) != 0;
-    static constexpr bool DefaultAdvancedMode = (DefaultFlags & AdvancedMode) != 0;
-    static constexpr bool DefaultBraces = (DefaultCharset & Braces) != 0;
-    static constexpr bool DefaultPunctuation = (DefaultCharset & Punctuation) != 0;
-    static constexpr bool DefaultQuotes = (DefaultCharset & Quotes) != 0;
-    static constexpr bool DefaultDashes = (DefaultCharset & Dashes) != 0;
-    static constexpr bool DefaultMath = (DefaultCharset & Math) != 0;
-    static constexpr bool DefaultLogograms = (DefaultCharset & Logograms) != 0;
-    static constexpr bool DefaultEASCII = (DefaultCharset & EASCII) != 0;
-    static constexpr bool DefaultLookAlike = (DefaultFlags & ExcludeLookAlike) != 0;
-    static constexpr bool DefaultFromEveryGroup = (DefaultFlags & CharFromEveryGroup) != 0;
 
 private:
     QVector<PasswordGroup> passwordGroups() const;
@@ -91,9 +88,8 @@ private:
     int m_length;
     CharClasses m_classes;
     GeneratorFlags m_flags;
+    QString m_custom;
     QString m_excluded;
-
-    Q_DISABLE_COPY(PasswordGenerator)
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(PasswordGenerator::CharClasses)

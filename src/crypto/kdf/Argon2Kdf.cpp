@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,9 +17,11 @@
 
 #include "Argon2Kdf.h"
 
-#include <QtConcurrent>
+#include <QElapsedTimer>
+#include <QThread>
 
-#include "crypto/argon2/argon2.h"
+#include <botan/pwdhash.h>
+
 #include "format/KeePass2.h"
 
 /**
@@ -29,13 +31,13 @@
  * a 256-bit salt is generated each time the database is saved, the tag length is 256 bits, no secret key
  * or associated data. KeePass uses the latest version of Argon2, v1.3.
  */
-Argon2Kdf::Argon2Kdf()
-    : Kdf::Kdf(KeePass2::KDF_ARGON2)
-    , m_version(0x13)
-    , m_memory(1 << 16)
-    , m_parallelism(static_cast<quint32>(QThread::idealThreadCount()))
+Argon2Kdf::Argon2Kdf(Type type)
+    : Kdf::Kdf(type == Type::Argon2d ? KeePass2::KDF_ARGON2D : KeePass2::KDF_ARGON2ID)
+    , m_version(ARGON2_DEFAULT_VERSION)
+    , m_memory(ARGON2_DEFAULT_MEMORY)
+    , m_parallelism(qMin<quint32>(QThread::idealThreadCount(), ARGON2_DEFAULT_PARALLELISM))
 {
-    m_rounds = 10;
+    m_rounds = ARGON2_DEFAULT_ROUNDS;
 }
 
 quint32 Argon2Kdf::version() const
@@ -50,8 +52,13 @@ bool Argon2Kdf::setVersion(quint32 version)
         m_version = version;
         return true;
     }
-    m_version = 0x13;
+    m_version = ARGON2_DEFAULT_VERSION;
     return false;
+}
+
+Argon2Kdf::Type Argon2Kdf::type() const
+{
+    return uuid() == KeePass2::KDF_ARGON2D ? Type::Argon2d : Type::Argon2id;
 }
 
 quint64 Argon2Kdf::memory() const
@@ -66,7 +73,7 @@ bool Argon2Kdf::setMemory(quint64 kibibytes)
         m_memory = kibibytes;
         return true;
     }
-    m_memory = 16;
+    m_memory = ARGON2_DEFAULT_MEMORY;
     return false;
 }
 
@@ -82,7 +89,7 @@ bool Argon2Kdf::setParallelism(quint32 threads)
         m_parallelism = threads;
         return true;
     }
-    m_parallelism = 1;
+    m_parallelism = ARGON2_DEFAULT_PARALLELISM;
     return false;
 }
 
@@ -133,7 +140,7 @@ bool Argon2Kdf::processParameters(const QVariantMap& p)
 QVariantMap Argon2Kdf::writeParameters()
 {
     QVariantMap p;
-    p.insert(KeePass2::KDFPARAM_UUID, KeePass2::KDF_ARGON2.toRfc4122());
+    p.insert(KeePass2::KDFPARAM_UUID, uuid().toRfc4122());
     p.insert(KeePass2::KDFPARAM_ARGON2_VERSION, version());
     p.insert(KeePass2::KDFPARAM_ARGON2_PARALLELISM, parallelism());
     p.insert(KeePass2::KDFPARAM_ARGON2_MEMORY, memory() * 1024);
@@ -158,33 +165,20 @@ bool Argon2Kdf::transform(const QByteArray& raw, QByteArray& result) const
 {
     result.clear();
     result.resize(32);
-    return transformKeyRaw(raw, seed(), version(), rounds(), memory(), parallelism(), result);
-}
 
-bool Argon2Kdf::transformKeyRaw(const QByteArray& key,
-                                const QByteArray& seed,
-                                quint32 version,
-                                quint32 rounds,
-                                quint64 memory,
-                                quint32 parallelism,
-                                QByteArray& result)
-{
-    // Time Cost, Mem Cost, Threads/Lanes, Password, length, Salt, length, out, length
-    int rc = argon2_hash(rounds,
-                         memory,
-                         parallelism,
-                         key.data(),
-                         key.size(),
-                         seed.data(),
-                         seed.size(),
-                         result.data(),
-                         result.size(),
-                         nullptr,
-                         0,
-                         Argon2_d,
-                         version);
-    if (rc != ARGON2_OK) {
-        qWarning("Argon2 error: %s", argon2_error_message(rc));
+    const std::string algoName = (type() == Type::Argon2d) ? "Argon2d" : "Argon2id";
+    try {
+        // from_params for Argon2: i1 == M (memory in KiB), i2 == t (iterations), i3 == p (parallelism)
+        auto pwdHash =
+            Botan::PasswordHashFamily::create_or_throw(algoName)->from_params(memory(), rounds(), parallelism());
+        pwdHash->derive_key(reinterpret_cast<uint8_t*>(result.data()),
+                            result.size(),
+                            raw.constData(),
+                            raw.size(),
+                            reinterpret_cast<const uint8_t*>(seed().constData()),
+                            seed().size());
+    } catch (const std::exception& e) {
+        qWarning("Argon2 error: %s", e.what());
         return false;
     }
 
@@ -196,18 +190,22 @@ QSharedPointer<Kdf> Argon2Kdf::clone() const
     return QSharedPointer<Argon2Kdf>::create(*this);
 }
 
-int Argon2Kdf::benchmarkImpl(int msec) const
+int Argon2Kdf::benchmark(int msec) const
 {
     QByteArray key = QByteArray(16, '\x7E');
-    QByteArray seed = QByteArray(32, '\x4B');
 
     QElapsedTimer timer;
     timer.start();
 
-    int rounds = 4;
-    if (transformKeyRaw(key, seed, version(), rounds, memory(), parallelism(), key)) {
-        return static_cast<int>(rounds * (static_cast<float>(msec) / timer.elapsed()));
+    if (transform(key, key)) {
+        return static_cast<int>(rounds() * (static_cast<float>(msec) / timer.elapsed()));
     }
 
     return 1;
+}
+
+QString Argon2Kdf::toString() const
+{
+    return QObject::tr("Argon2%1 (%2 rounds, %3 KB)")
+        .arg(type() == Type::Argon2d ? "d" : "id", QString::number(rounds()), QString::number(memory()));
 }

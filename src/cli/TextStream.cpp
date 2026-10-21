@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@
 #include "TextStream.h"
 
 #include <QProcessEnvironment>
-#include <QTextCodec>
+#include <QStringConverter>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -58,13 +58,22 @@ TextStream::TextStream(const QByteArray& array, QIODevice::OpenMode openMode)
     detectCodec();
 }
 
+void TextStream::write(const char* str)
+{
+    // Workaround for an issue with QTextStream. Its operator<<(const char *string) will encode the
+    // string with a non-UTF-8 encoding. We work around this by wrapping the input string into
+    // a QString, thus enforcing UTF-8. More info:
+    // https://code.qt.io/cgit/qt/qtbase.git/commit?id=cec8cdba4d1b856e17c8743ba8803349d42dc701
+    *this << QString(str);
+}
+
 void TextStream::detectCodec()
 {
     QString codecName = "UTF-8";
     auto env = QProcessEnvironment::systemEnvironment();
 
 #ifdef Q_OS_WIN
-    WINBOOL success = false;
+    bool success = false;
 #ifdef CP_UTF8
     success = SetConsoleOutputCP(CP_UTF8);
 #endif
@@ -78,13 +87,23 @@ void TextStream::detectCodec()
         // Only override codec if LANG is set, otherwise Qt will assume
         // US-ASCII, which is almost always wrong and results in
         // Unicode passwords being displayed as question marks.
-        codecName = QTextCodec::codecForLocale()->name();
+        codecName = "System";
     }
 #endif
 
     codecName = env.value("ENCODING_OVERRIDE", codecName);
-    auto* codec = QTextCodec::codecForName(codecName.toLatin1());
-    if (codec) {
-        setCodec(codec);
+
+    // Default to UTF-8, allow override via environment variable if set to valid codec name
+    // Qt doesn't recognize Windows code pages, so explicitly set codec to System for them
+    QStringConverter::Encoding codec = QStringConverter::Utf8;
+    auto encoding = QStringConverter::encodingForName(codecName.toLocal8Bit());
+    if (encoding) {
+        codec = *encoding;
+    } else if (codecName.toLatin1().compare(QByteArray("Windows-850"), Qt::CaseInsensitive) == 0
+               || codecName.toLatin1().compare(QByteArray("Windows-1252"), Qt::CaseInsensitive) == 0
+               || codecName.toLatin1().compare(QByteArray("System"), Qt::CaseInsensitive) == 0) {
+        codec = QStringConverter::System;
     }
+
+    setEncoding(codec);
 }

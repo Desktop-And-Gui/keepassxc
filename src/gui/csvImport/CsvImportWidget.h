@@ -19,16 +19,13 @@
 #ifndef KEEPASSX_CSVIMPORTWIDGET_H
 #define KEEPASSX_CSVIMPORTWIDGET_H
 
-#include <QComboBox>
-#include <QList>
-#include <QPushButton>
-#include <QScopedPointer>
-#include <QStackedWidget>
 #include <QStringListModel>
+#include <QWidget>
 
-#include "core/Metadata.h"
-#include "gui/csvImport/CsvParserModel.h"
-#include "keys/PasswordKey.h"
+class CsvParserModel;
+class Database;
+class Group;
+class QComboBox;
 
 namespace Ui
 {
@@ -41,36 +38,37 @@ class CsvImportWidget : public QWidget
 
 public:
     explicit CsvImportWidget(QWidget* parent = nullptr);
-    ~CsvImportWidget();
-    void load(const QString& filename, Database* const db);
+    ~CsvImportWidget() override;
+
+    void load(const QString& filename);
+    QSharedPointer<Database> buildDatabase();
 
 signals:
-    void editFinished(bool accepted);
+    void message(QString msg);
 
 private slots:
     void parse();
-    void comboChanged(QComboBox* currentSender, int comboId);
+    void comboChanged(int index);
     void skippedChanged(int rows);
-    void writeDatabase();
     void updatePreview();
-    void setRootGroup();
-    void reject();
 
 private:
-    Q_DISABLE_COPY(CsvImportWidget)
-    const QScopedPointer<Ui::CsvImportWidget> m_ui;
-    CsvParserModel* const m_parserModel;
-    QStringListModel* const m_comboModel;
-    QList<QComboBox*> m_combos;
-    Database* m_db;
-
-    const QStringList m_columnHeader;
-    QStringList m_fieldSeparatorList;
     void configParser();
     void updateTableview();
-    Group* splitGroups(const QString& label);
-    Group* hasChildren(Group* current, const QString& groupName);
     QString formatStatusText() const;
+
+    QScopedPointer<Ui::CsvImportWidget> m_ui;
+
+    CsvParserModel* m_parserModel;
+    QStringListModel* m_comboModel;
+    QList<QComboBox*> m_combos;
+    QStringList m_columnHeader;
+    QStringList m_columnHeaderEnglish;
+    QStringList m_fieldSeparatorList;
+    QString m_filename;
+    bool m_buildingPreview = false;
+
+    Q_DISABLE_COPY(CsvImportWidget)
 };
 
 #endif // KEEPASSX_CSVIMPORTWIDGET_H

@@ -22,12 +22,6 @@
 #include "gui/MainWindow.h"
 #include "util/TemporaryFile.h"
 
-#include <QAbstractItemModel>
-#include <QObject>
-#include <QPointer>
-#include <QScopedPointer>
-#include <QSharedPointer>
-
 class Database;
 class DatabaseTabWidget;
 class DatabaseWidget;
@@ -36,9 +30,6 @@ class QAbstractItemView;
 class TestGui : public QObject
 {
     Q_OBJECT
-
-protected slots:
-    void createDatabaseCallback();
 
 private slots:
     void initTestCase();
@@ -49,12 +40,16 @@ private slots:
     void testSettingsDefaultTabOrder();
     void testCreateDatabase();
     void testMergeDatabase();
+    void testRemoteSyncDatabaseSameKey();
+    void testRemoteSyncDatabaseRequiresPassword();
+    void testOpenRemoteDatabase();
     void testAutoreloadDatabase();
     void testTabs();
     void testEditEntry();
     void testSearchEditEntry();
     void testAddEntry();
     void testPasswordEntryEntropy();
+    void testPasswordEntryEntropy_data();
     void testDicewareEntryEntropy();
     void testTotp();
     void testSearch();
@@ -64,17 +59,24 @@ private slots:
     void testDragAndDropEntry();
     void testDragAndDropGroup();
     void testSaveAs();
+    void testSaveBackup();
     void testSave();
+    void testSaveBackupPath();
+    void testSaveBackupPath_data();
     void testDatabaseSettings();
-    void testKeePass1Import();
     void testDatabaseLocking();
     void testDragAndDropKdbxFiles();
     void testSortGroups();
+    void testAutoType();
     void testTrayRestoreHide();
+    void testShortcutConfig();
+    void testMenuActionStates();
+    void testDeleteEntryDuringModalDialog();
 
 private:
-    int addCannedEntries();
-    void checkDatabase(QString dbFileName = "");
+    void addCannedEntries();
+    void checkDatabase(const QString& filePath, const QString& expectedDbName);
+    void checkDatabase(const QString& filePath = {});
     void triggerAction(const QString& name);
     void dragAndDropGroup(const QModelIndex& sourceIndex,
                           const QModelIndex& targetIndex,
@@ -85,9 +87,13 @@ private:
     void clickIndex(const QModelIndex& index,
                     QAbstractItemView* view,
                     Qt::MouseButton button,
-                    Qt::KeyboardModifiers stateKey = 0);
+                    Qt::KeyboardModifiers stateKey = {});
+    void checkSaveDatabase();
+    void checkStatusBarText(const QString& textFragment);
+    void prepareAndTriggerRemoteSync();
 
     QScopedPointer<MainWindow> m_mainWindow;
+    QPointer<QLabel> m_statusBarLabel;
     QPointer<DatabaseTabWidget> m_tabWidget;
     QPointer<DatabaseWidget> m_dbWidget;
     QSharedPointer<Database> m_db;

@@ -19,10 +19,8 @@
 #ifndef KEEPASSX_MESSAGEBOX_H
 #define KEEPASSX_MESSAGEBOX_H
 
-#include <QHash>
 #include <QMap>
 #include <QMessageBox>
-#include <QPushButton>
 
 class MessageBox
 {
@@ -60,10 +58,11 @@ public:
         Disable = 1 << 25,
         Merge = 1 << 26,
         Continue = 1 << 27,
+        ContinueWithWeakPass = 1 << 28,
 
         // Internal loop markers. Update Last when new KeePassXC button is added
         First = Ok,
-        Last = Continue,
+        Last = ContinueWithWeakPass,
     };
 
     enum Action

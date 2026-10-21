@@ -16,25 +16,16 @@
  */
 
 #include "Estimate.h"
-#include "cli/Utils.h"
 
-#include "cli/TextStream.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "Utils.h"
+#include "core/Global.h"
+#include "core/PasswordHealth.h"
+
+#include <QCommandLineParser>
 #include <zxcvbn.h>
 
-/* For pre-compiled headers under windows */
-#ifdef _WIN32
-#ifndef __MINGW32__
-#include "stdafx.h"
-#endif
-#endif
-
 const QCommandLineOption Estimate::AdvancedOption =
-    QCommandLineOption(QStringList() << "a"
-                                     << "advanced",
-                       QObject::tr("Perform advanced analysis on the password."));
+    QCommandLineOption(QStringList() << "a" << "advanced", QObject::tr("Perform advanced analysis on the password."));
 
 Estimate::Estimate()
 {
@@ -47,22 +38,21 @@ Estimate::Estimate()
 
 static void estimate(const char* pwd, bool advanced)
 {
-    TextStream out(Utils::STDOUT, QIODevice::WriteOnly);
+    auto& out = Utils::STDOUT;
 
-    double e = 0.0;
-    int len = static_cast<int>(strlen(pwd));
+    auto len = static_cast<int>(strlen(pwd));
     if (!advanced) {
-        e = ZxcvbnMatch(pwd, nullptr, nullptr);
+        const auto e = PasswordHealth(pwd).entropy();
         // clang-format off
         out << QObject::tr("Length %1").arg(len, 0) << '\t'
             << QObject::tr("Entropy %1").arg(e, 0, 'f', 3) << '\t'
-            << QObject::tr("Log10 %1").arg(e * 0.301029996, 0, 'f', 3) << endl;
+            << QObject::tr("Log10 %1").arg(e * 0.301029996, 0, 'f', 3) << Qt::endl;
         // clang-format on
     } else {
-        int ChkLen = 0;
+        int pwdLen = 0;
         ZxcMatch_t *info, *p;
         double m = 0.0;
-        e = ZxcvbnMatch(pwd, nullptr, &info);
+        const auto e = ZxcvbnMatch(pwd, nullptr, &info);
         for (p = info; p; p = p->Next) {
             m += p->Entrpy;
         }
@@ -71,10 +61,10 @@ static void estimate(const char* pwd, bool advanced)
         out << QObject::tr("Length %1").arg(len) << '\t'
             << QObject::tr("Entropy %1").arg(e, 0, 'f', 3) << '\t'
             << QObject::tr("Log10 %1").arg(e * 0.301029996, 0, 'f', 3) << "\n  "
-            << QObject::tr("Multi-word extra bits %1").arg(m, 0, 'f', 1) << endl;
+            << QObject::tr("Multi-word extra bits %1").arg(m, 0, 'f', 1) << Qt::endl;
         // clang-format on
         p = info;
-        ChkLen = 0;
+        pwdLen = 0;
         while (p) {
             int n;
             switch (static_cast<int>(p->Type)) {
@@ -134,24 +124,23 @@ static void estimate(const char* pwd, bool advanced)
                 break;
 
             default:
-                out << "  " << QObject::tr("Type: Unknown%1").arg(p->Type) << "        ";
+                out << "  " << QObject::tr("Type: Unknown (%1)").arg(p->Type) << "        ";
                 break;
             }
-            ChkLen += p->Length;
-            // clang-format off
+            pwdLen += p->Length;
             out << QObject::tr("Length %1").arg(p->Length) << '\t'
-                << QObject::tr("Entropy %1 (%2)").arg(p->Entrpy, 6, 'f', 3).arg(p->Entrpy * 0.301029996, 0, 'f', 2) << '\t';
-            // clang-format on
+                << QObject::tr("Entropy %1 (%2)").arg(p->Entrpy, 6, 'f', 3).arg(p->Entrpy * 0.301029996, 0, 'f', 2)
+                << '\t';
             for (n = 0; n < p->Length; ++n, ++pwd) {
                 out << *pwd;
             }
-            out << endl;
+            out << Qt::endl;
             p = p->Next;
         }
         ZxcvbnFreeInfo(info);
-        if (ChkLen != len) {
-            out << QObject::tr("*** Password length (%1) != sum of length of parts (%2) ***").arg(len).arg(ChkLen)
-                << endl;
+        if (pwdLen != len) {
+            out << QObject::tr("*** Password length (%1) != sum of length of parts (%2) ***").arg(len).arg(pwdLen)
+                << Qt::endl;
         }
     }
 }
@@ -163,16 +152,16 @@ int Estimate::execute(const QStringList& arguments)
         return EXIT_FAILURE;
     }
 
-    TextStream inputTextStream(Utils::STDIN, QIODevice::ReadOnly);
+    auto& in = Utils::STDIN;
     const QStringList args = parser->positionalArguments();
 
     QString password;
     if (args.size() == 1) {
         password = args.at(0);
     } else {
-        password = inputTextStream.readLine();
+        password = in.readLine();
     }
 
-    estimate(password.toLatin1(), parser->isSet(Estimate::AdvancedOption));
+    estimate(password.toUtf8(), parser->isSet(Estimate::AdvancedOption));
     return EXIT_SUCCESS;
 }

@@ -30,6 +30,7 @@ private slots:
     void testProtectedStrings();
     void testBrokenHeaderHash();
     void testFormat300();
+    void testAttachmentIndexStability();
 
 protected:
     void initTestCaseImpl() override;
@@ -40,11 +41,6 @@ protected:
     void writeXml(QBuffer* buf, Database* db, bool& hasError, QString& errorString) override;
 
     void readKdbx(QIODevice* device,
-                  QSharedPointer<const CompositeKey> key,
-                  QSharedPointer<Database> db,
-                  bool& hasError,
-                  QString& errorString) override;
-    void readKdbx(const QString& path,
                   QSharedPointer<const CompositeKey> key,
                   QSharedPointer<Database> db,
                   bool& hasError,

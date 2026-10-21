@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,17 +19,27 @@
 
 #include <QBuffer>
 #include <QFile>
+#include <QMap>
 
 #include "core/Endian.h"
-#include "core/Metadata.h"
+#include "crypto/CryptoHash.h"
 #include "format/KeePass2RandomStream.h"
-#include "streams/QtIOCompressor"
+#include "streams/qtiocompressor.h"
 
 /**
  * @param version KDBX version
  */
 KdbxXmlWriter::KdbxXmlWriter(quint32 version)
     : m_kdbxVersion(version)
+{
+    Q_ASSERT_X(m_kdbxVersion < KeePass2::FILE_VERSION_4,
+               "KDBX version",
+               "KDBX version >= 4 requires explicit binary index map.");
+}
+
+KdbxXmlWriter::KdbxXmlWriter(quint32 version, KdbxXmlWriter::BinaryIdxMap binaryIdxMap)
+    : m_kdbxVersion(version)
+    , m_binaryIdxMap(std::move(binaryIdxMap))
 {
 }
 
@@ -45,9 +55,10 @@ void KdbxXmlWriter::writeDatabase(QIODevice* device,
 
     m_xml.setAutoFormatting(true);
     m_xml.setAutoFormattingIndent(-1); // 1 tab
-    m_xml.setCodec("UTF-8");
 
-    generateIdMap();
+    if (m_kdbxVersion < KeePass2::FILE_VERSION_4) {
+        fillBinaryIdxMap();
+    }
 
     m_xml.setDevice(device);
     m_xml.writeStartDocument("1.0", true);
@@ -67,8 +78,9 @@ void KdbxXmlWriter::writeDatabase(QIODevice* device,
 void KdbxXmlWriter::writeDatabase(const QString& filename, Database* db)
 {
     QFile file(filename);
-    file.open(QIODevice::WriteOnly | QIODevice::Truncate);
-    writeDatabase(&file, db);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        writeDatabase(&file, db);
+    }
 }
 
 bool KdbxXmlWriter::hasError()
@@ -81,18 +93,40 @@ QString KdbxXmlWriter::errorString()
     return m_errorStr;
 }
 
-void KdbxXmlWriter::generateIdMap()
+/**
+ * Generate a map of entry attachments to deduplicated attachment index IDs.
+ * This is basically duplicated code from Kdbx4Writer.cpp for KDBX 3 compatibility.
+ * I don't have a good solution for getting rid of this duplication without getting rid of KDBX 3.
+ */
+void KdbxXmlWriter::fillBinaryIdxMap()
 {
     const QList<Entry*> allEntries = m_db->rootGroup()->entriesRecursive(true);
-    int nextId = 0;
+    QHash<QByteArray, qint64> writtenAttachments;
+    qint64 nextIdx = 0;
 
     for (Entry* entry : allEntries) {
         const QList<QString> attachmentKeys = entry->attachments()->keys();
         for (const QString& key : attachmentKeys) {
             QByteArray data = entry->attachments()->value(key);
-            if (!m_idMap.contains(data)) {
-                m_idMap.insert(data, nextId++);
+            CryptoHash hash(CryptoHash::Sha256);
+            // Namespace KeeShare attachments so they don't get deduplicated together with attachments
+            // from other databases. Prevents potential filesize side channels.
+            auto group = entry->group();
+            if (!group && entry->historyOwner()) {
+                group = entry->historyOwner()->group();
             }
+            if (group && group->isShared()) {
+                hash.addData(group->uuid().toByteArray());
+            } else {
+                hash.addData(m_db->uuid().toByteArray());
+            }
+            hash.addData(data);
+
+            const auto hashResult = hash.result();
+            if (!writtenAttachments.contains(hashResult)) {
+                writtenAttachments.insert(hashResult, nextIdx++);
+            }
+            m_binaryIdxMap.insert(qMakePair(entry, key), writtenAttachments.value(hashResult));
         }
     }
 }
@@ -111,10 +145,10 @@ void KdbxXmlWriter::writeMetadata()
     writeString("DefaultUserName", m_meta->defaultUserName());
     writeDateTime("DefaultUserNameChanged", m_meta->defaultUserNameChanged());
     writeNumber("MaintenanceHistoryDays", m_meta->maintenanceHistoryDays());
-    writeColor("Color", m_meta->color());
-    writeDateTime("MasterKeyChanged", m_meta->masterKeyChanged());
-    writeNumber("MasterKeyChangeRec", m_meta->masterKeyChangeRec());
-    writeNumber("MasterKeyChangeForce", m_meta->masterKeyChangeForce());
+    writeString("Color", m_meta->color());
+    writeDateTime("MasterKeyChanged", m_meta->databaseKeyChanged());
+    writeNumber("MasterKeyChangeRec", m_meta->databaseKeyChangeRec());
+    writeNumber("MasterKeyChangeForce", m_meta->databaseKeyChangeForce());
     writeMemoryProtection();
     writeCustomIcons();
     writeBool("RecycleBinEnabled", m_meta->recycleBinEnabled());
@@ -132,7 +166,7 @@ void KdbxXmlWriter::writeMetadata()
     if (m_kdbxVersion < KeePass2::FILE_VERSION_4) {
         writeBinaries();
     }
-    writeCustomData(m_meta->customData());
+    writeCustomData(m_meta->customData(), true);
 
     m_xml.writeEndElement();
 }
@@ -162,32 +196,39 @@ void KdbxXmlWriter::writeCustomIcons()
     m_xml.writeEndElement();
 }
 
-void KdbxXmlWriter::writeIcon(const QUuid& uuid, const QImage& icon)
+void KdbxXmlWriter::writeIcon(const QUuid& uuid, const Metadata::CustomIconData& iconData)
 {
     m_xml.writeStartElement("Icon");
 
     writeUuid("UUID", uuid);
-
-    QByteArray ba;
-    QBuffer buffer(&ba);
-    buffer.open(QIODevice::WriteOnly);
-    // TODO: check !icon.save()
-    icon.save(&buffer, "PNG");
-    buffer.close();
-    writeBinary("Data", ba);
+    if (m_kdbxVersion >= KeePass2::FILE_VERSION_4_1) {
+        if (!iconData.name.isEmpty()) {
+            writeString("Name", iconData.name);
+        }
+        if (iconData.lastModified.isValid()) {
+            writeDateTime("LastModificationTime", iconData.lastModified);
+        }
+    }
+    writeBinary("Data", iconData.data);
 
     m_xml.writeEndElement();
 }
 
 void KdbxXmlWriter::writeBinaries()
 {
+    // Reverse binary index map
+    QMap<qint64, QByteArray> binaries;
+    for (auto i = m_binaryIdxMap.constBegin(); i != m_binaryIdxMap.constEnd(); ++i) {
+        if (!binaries.contains(i.value())) {
+            binaries.insert(i.value(), i.key().first->attachments()->value(i.key().second));
+        }
+    }
+
     m_xml.writeStartElement("Binaries");
 
-    QHash<QByteArray, int>::const_iterator i;
-    for (i = m_idMap.constBegin(); i != m_idMap.constEnd(); ++i) {
+    for (auto i = binaries.constBegin(); i != binaries.constEnd(); ++i) {
         m_xml.writeStartElement("Binary");
-
-        m_xml.writeAttribute("ID", QString::number(i.value()));
+        m_xml.writeAttribute("ID", QString::number(i.key()));
 
         QByteArray data;
         if (m_db->compressionAlgorithm() == Database::CompressionGZip) {
@@ -200,15 +241,15 @@ void KdbxXmlWriter::writeBinaries()
             compressor.setStreamFormat(QtIOCompressor::GzipFormat);
             compressor.open(QIODevice::WriteOnly);
 
-            qint64 bytesWritten = compressor.write(i.key());
-            Q_ASSERT(bytesWritten == i.key().size());
+            qint64 bytesWritten = compressor.write(i.value());
+            Q_ASSERT(bytesWritten == i.value().size());
             Q_UNUSED(bytesWritten);
             compressor.close();
 
             buffer.seek(0);
             data = buffer.readAll();
         } else {
-            data = i.key();
+            data = i.value();
         }
 
         if (!data.isEmpty()) {
@@ -220,7 +261,7 @@ void KdbxXmlWriter::writeBinaries()
     m_xml.writeEndElement();
 }
 
-void KdbxXmlWriter::writeCustomData(const CustomData* customData)
+void KdbxXmlWriter::writeCustomData(const CustomData* customData, bool writeItemLastModified)
 {
     if (customData->isEmpty()) {
         return;
@@ -229,18 +270,23 @@ void KdbxXmlWriter::writeCustomData(const CustomData* customData)
 
     const QList<QString> keyList = customData->keys();
     for (const QString& key : keyList) {
-        writeCustomDataItem(key, customData->value(key));
+        writeCustomDataItem(key, customData->item(key), writeItemLastModified);
     }
 
     m_xml.writeEndElement();
 }
 
-void KdbxXmlWriter::writeCustomDataItem(const QString& key, const QString& value)
+void KdbxXmlWriter::writeCustomDataItem(const QString& key,
+                                        const CustomData::CustomDataItem& item,
+                                        bool writeLastModified)
 {
     m_xml.writeStartElement("Item");
 
     writeString("Key", key);
-    writeString("Value", value);
+    writeString("Value", item.value);
+    if (writeLastModified && m_kdbxVersion >= KeePass2::FILE_VERSION_4_1 && item.lastModified.isValid()) {
+        writeDateTime("LastModificationTime", item.lastModified);
+    }
 
     m_xml.writeEndElement();
 }
@@ -266,6 +312,9 @@ void KdbxXmlWriter::writeGroup(const Group* group)
     writeUuid("UUID", group->uuid());
     writeString("Name", group->name());
     writeString("Notes", group->notes());
+    if (!group->tags().isEmpty()) {
+        writeString("Tags", group->tags());
+    }
     writeNumber("IconID", group->iconNumber());
 
     if (!group->iconUuid().isNull()) {
@@ -283,6 +332,9 @@ void KdbxXmlWriter::writeGroup(const Group* group)
 
     if (m_kdbxVersion >= KeePass2::FILE_VERSION_4) {
         writeCustomData(group->customData());
+    }
+    if (m_kdbxVersion >= KeePass2::FILE_VERSION_4_1 && !group->previousParentGroupUuid().isNull()) {
+        writeUuid("PreviousParentGroup", group->previousParentGroupUuid());
     }
 
     const QList<Entry*>& entryList = group->entries();
@@ -346,11 +398,20 @@ void KdbxXmlWriter::writeEntry(const Entry* entry)
     if (!entry->iconUuid().isNull()) {
         writeUuid("CustomIconUUID", entry->iconUuid());
     }
-    writeColor("ForegroundColor", entry->foregroundColor());
-    writeColor("BackgroundColor", entry->backgroundColor());
+    writeString("ForegroundColor", entry->foregroundColor());
+    writeString("BackgroundColor", entry->backgroundColor());
     writeString("OverrideURL", entry->overrideUrl());
     writeString("Tags", entry->tags());
     writeTimes(entry->timeInfo());
+
+    if (m_kdbxVersion >= KeePass2::FILE_VERSION_4_1) {
+        if (entry->excludeFromReports()) {
+            writeBool("QualityCheck", false);
+        }
+        if (!entry->previousParentGroupUuid().isNull()) {
+            writeUuid("PreviousParentGroup", entry->previousParentGroupUuid());
+        }
+    }
 
     const QList<QString> attributesKeyList = entry->attributes()->keys();
     for (const QString& key : attributesKeyList) {
@@ -402,7 +463,7 @@ void KdbxXmlWriter::writeEntry(const Entry* entry)
         writeString("Key", key);
 
         m_xml.writeStartElement("Value");
-        m_xml.writeAttribute("Ref", QString::number(m_idMap[entry->attachments()->value(key)]));
+        m_xml.writeAttribute("Ref", QString::number(m_binaryIdxMap[qMakePair(entry, key)]));
         m_xml.writeEndElement();
 
         m_xml.writeEndElement();
@@ -530,18 +591,6 @@ void KdbxXmlWriter::writeUuid(const QString& qualifiedName, const Entry* entry)
 void KdbxXmlWriter::writeBinary(const QString& qualifiedName, const QByteArray& ba)
 {
     writeString(qualifiedName, QString::fromLatin1(ba.toBase64()));
-}
-
-void KdbxXmlWriter::writeColor(const QString& qualifiedName, const QColor& color)
-{
-    QString colorStr;
-
-    if (color.isValid()) {
-        colorStr = QString("#%1%2%3").arg(
-            colorPartToString(color.red()), colorPartToString(color.green()), colorPartToString(color.blue()));
-    }
-
-    writeString(qualifiedName, colorStr);
 }
 
 void KdbxXmlWriter::writeTriState(const QString& qualifiedName, Group::TriState triState)

@@ -19,7 +19,6 @@
 #define KEEPASSXC_EDITGROUPWIDGETKEESHARE_H
 
 #include <QPointer>
-#include <QStandardItemModel>
 #include <QWidget>
 
 class Group;
@@ -40,7 +39,7 @@ public:
     void setGroup(Group* temporaryGroup, QSharedPointer<Database> database);
 
 private slots:
-    void showSharingState();
+    void updateSharingState();
 
 private slots:
     void update();
@@ -49,8 +48,7 @@ private slots:
     void selectPassword();
     void launchPathSelectionDialog();
     void selectPath();
-    void setGeneratedPassword(const QString& password);
-    void togglePasswordGeneratorButton(bool checked);
+    void keepGroupsToggled(bool);
 
 private:
     QScopedPointer<Ui::EditGroupWidgetKeeShare> m_ui;

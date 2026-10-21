@@ -18,23 +18,23 @@
 
 #include "Kdbx3Reader.h"
 
+#include "core/AsyncTask.h"
 #include "core/Endian.h"
 #include "core/Group.h"
 #include "crypto/CryptoHash.h"
 #include "format/KdbxXmlReader.h"
 #include "format/KeePass2RandomStream.h"
 #include "streams/HashedBlockStream.h"
-#include "streams/QtIOCompressor"
+#include "streams/StoreDataStream.h"
 #include "streams/SymmetricCipherStream.h"
-
-#include <QBuffer>
+#include "streams/qtiocompressor.h"
 
 bool Kdbx3Reader::readDatabaseImpl(QIODevice* device,
                                    const QByteArray& headerData,
                                    QSharedPointer<const CompositeKey> key,
                                    Database* db)
 {
-    Q_ASSERT(m_kdbxVersion <= KeePass2::FILE_VERSION_3_1);
+    Q_ASSERT((db->formatVersion() & KeePass2::FILE_VERSION_CRITICAL_MASK) <= KeePass2::FILE_VERSION_3);
 
     if (hasError()) {
         return false;
@@ -43,30 +43,30 @@ bool Kdbx3Reader::readDatabaseImpl(QIODevice* device,
     // check if all required headers were present
     if (m_masterSeed.isEmpty() || m_encryptionIV.isEmpty() || m_streamStartBytes.isEmpty()
         || m_protectedStreamKey.isEmpty() || db->cipher().isNull()) {
-        raiseError(tr("missing database headers"));
+        raiseError(tr("Missing database headers"));
         return false;
     }
 
-    if (!db->setKey(key, false)) {
-        raiseError(tr("Unable to calculate master key"));
+    bool ok = AsyncTask::runAndWaitForFuture([&] { return db->setKey(key, false); });
+    if (!ok) {
+        raiseError(tr("Unable to calculate database key"));
         return false;
     }
 
     if (!db->challengeMasterSeed(m_masterSeed)) {
-        raiseError(tr("Unable to issue challenge-response."));
+        raiseError(tr("Unable to issue challenge-response: %1").arg(db->keyError()));
         return false;
     }
 
     CryptoHash hash(CryptoHash::Sha256);
     hash.addData(m_masterSeed);
     hash.addData(db->challengeResponseKey());
-    hash.addData(db->transformedMasterKey());
+    hash.addData(db->transformedDatabaseKey());
     QByteArray finalKey = hash.result();
 
-    SymmetricCipher::Algorithm cipher = SymmetricCipher::cipherToAlgorithm(db->cipher());
-    SymmetricCipherStream cipherStream(
-        device, cipher, SymmetricCipher::algorithmMode(cipher), SymmetricCipher::Decrypt);
-    if (!cipherStream.init(finalKey, m_encryptionIV)) {
+    auto mode = SymmetricCipher::cipherUuidToMode(db->cipher());
+    SymmetricCipherStream cipherStream(device);
+    if (!cipherStream.init(mode, SymmetricCipher::Decrypt, finalKey, m_encryptionIV)) {
         raiseError(cipherStream.errorString());
         return false;
     }
@@ -104,8 +104,8 @@ bool Kdbx3Reader::readDatabaseImpl(QIODevice* device,
         xmlDevice = ioCompressor.data();
     }
 
-    KeePass2RandomStream randomStream(KeePass2::ProtectedStreamAlgo::Salsa20);
-    if (!randomStream.init(m_protectedStreamKey)) {
+    KeePass2RandomStream randomStream;
+    if (!randomStream.init(SymmetricCipher::Salsa20, m_protectedStreamKey)) {
         raiseError(randomStream.errorString());
         return false;
     }
@@ -120,7 +120,7 @@ bool Kdbx3Reader::readDatabaseImpl(QIODevice* device,
         return false;
     }
 
-    Q_ASSERT(!xmlReader.headerHash().isEmpty() || m_kdbxVersion < KeePass2::FILE_VERSION_3_1);
+    Q_ASSERT(!xmlReader.headerHash().isEmpty() || db->formatVersion() < KeePass2::FILE_VERSION_3_1);
 
     if (!xmlReader.headerHash().isEmpty()) {
         QByteArray headerHash = CryptoHash::hash(headerData, CryptoHash::Sha256);
@@ -147,7 +147,7 @@ bool Kdbx3Reader::readHeaderField(StoreDataStream& headerStream, Database* db)
     bool ok;
     auto fieldLen = Endian::readSizedInt<quint16>(&headerStream, KeePass2::BYTEORDER, &ok);
     if (!ok) {
-        raiseError(tr("Invalid header field length"));
+        raiseError(tr("Invalid header field length: field %1").arg(fieldID));
         return false;
     }
 
@@ -155,7 +155,10 @@ bool Kdbx3Reader::readHeaderField(StoreDataStream& headerStream, Database* db)
     if (fieldLen != 0) {
         fieldData = headerStream.read(fieldLen);
         if (fieldData.size() != fieldLen) {
-            raiseError(tr("Invalid header data length"));
+            raiseError(tr("Invalid header data length: field %1, %2 expected, %3 found")
+                           .arg(fieldID)
+                           .arg(fieldLen)
+                           .arg(fieldData.size()));
             return false;
         }
     }

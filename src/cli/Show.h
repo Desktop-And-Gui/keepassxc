@@ -25,10 +25,13 @@ class Show : public DatabaseCommand
 public:
     Show();
 
-    int executeWithDatabase(QSharedPointer<Database> db, QSharedPointer<QCommandLineParser> parser);
+    int executeWithDatabase(QSharedPointer<Database> db, QSharedPointer<QCommandLineParser> parser) override;
 
     static const QCommandLineOption TotpOption;
+    static const QCommandLineOption AllAttributesOption;
     static const QCommandLineOption AttributesOption;
+    static const QCommandLineOption ProtectedAttributesOption;
+    static const QCommandLineOption AttachmentsOption;
 };
 
 #endif // KEEPASSXC_SHOW_H

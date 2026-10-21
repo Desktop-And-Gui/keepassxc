@@ -22,8 +22,6 @@
 #include <QPushButton>
 #include <QScrollArea>
 
-#include "core/FilePath.h"
-
 EditWidget::EditWidget(QWidget* parent)
     : DialogyWidget(parent)
     , m_ui(new Ui::EditWidget())
@@ -33,6 +31,7 @@ EditWidget::EditWidget(QWidget* parent)
     setModified(false);
 
     m_ui->messageWidget->setHidden(true);
+    m_ui->headerLabel->setHidden(true);
 
     QFont headerLabelFont = m_ui->headerLabel->font();
     headerLabelFont.setBold(true);
@@ -47,9 +46,7 @@ EditWidget::EditWidget(QWidget* parent)
     connect(m_ui->buttonBox, SIGNAL(clicked(QAbstractButton*)), SLOT(buttonClicked(QAbstractButton*)));
 }
 
-EditWidget::~EditWidget()
-{
-}
+EditWidget::~EditWidget() = default;
 
 void EditWidget::addPage(const QString& labelText, const QIcon& icon, QWidget* widget)
 {
@@ -59,28 +56,67 @@ void EditWidget::addPage(const QString& labelText, const QIcon& icon, QWidget* w
      * from automatic resizing and it now should be able to fit into a user's monitor even if the monitor is only 768
      * pixels high.
      */
-    auto* scrollArea = new QScrollArea(m_ui->stackedWidget);
-    scrollArea->setFrameShape(QFrame::NoFrame);
-    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scrollArea->setWidget(widget);
-    scrollArea->setWidgetResizable(true);
-    m_ui->stackedWidget->addWidget(scrollArea);
+    if (widget->inherits("QScrollArea")) {
+        m_ui->stackedWidget->addWidget(widget);
+    } else {
+        auto* scrollArea = new QScrollArea(m_ui->stackedWidget);
+        scrollArea->setFrameShape(QFrame::NoFrame);
+        scrollArea->setFrameShadow(QFrame::Plain);
+        scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scrollArea->setSizeAdjustPolicy(QScrollArea::AdjustToContents);
+        scrollArea->setWidgetResizable(true);
+        scrollArea->setWidget(widget);
+        m_ui->stackedWidget->addWidget(scrollArea);
+    }
     m_ui->categoryList->addCategory(labelText, icon);
+}
+
+bool EditWidget::hasPage(const QWidget* widget) const
+{
+    return pageIndex(widget) >= 0;
+}
+
+int EditWidget::pageIndex(const QWidget* widget) const
+{
+    if (!widget) {
+        return -1;
+    }
+
+    for (int i = 0; i < m_ui->stackedWidget->count(); i++) {
+        auto* scrollArea = qobject_cast<QScrollArea*>(m_ui->stackedWidget->widget(i));
+        if (scrollArea && (scrollArea == widget || scrollArea->widget() == widget)) {
+            return i;
+        }
+    }
+
+    return -1;
 }
 
 void EditWidget::setPageHidden(QWidget* widget, bool hidden)
 {
-    int index = m_ui->stackedWidget->indexOf(widget);
-    if (index != -1) {
-        m_ui->categoryList->setCategoryHidden(index, hidden);
+    int index = -1;
+
+    for (int i = 0; i < m_ui->stackedWidget->count(); i++) {
+        auto* scrollArea = qobject_cast<QScrollArea*>(m_ui->stackedWidget->widget(i));
+        if (scrollArea && scrollArea->widget() == widget) {
+            index = i;
+            break;
+        }
     }
 
-    if (index == m_ui->stackedWidget->currentIndex()) {
+    if (index == -1) {
+        return;
+    }
+
+    bool changed = m_ui->categoryList->isCategoryHidden(index) != hidden;
+    m_ui->categoryList->setCategoryHidden(index, hidden);
+
+    if (changed && index == m_ui->stackedWidget->currentIndex()) {
         int newIndex = m_ui->stackedWidget->currentIndex() - 1;
         if (newIndex < 0) {
             newIndex = m_ui->stackedWidget->count() - 1;
         }
-        m_ui->stackedWidget->setCurrentIndex(newIndex);
+        m_ui->categoryList->setCurrentCategory(newIndex);
     }
 }
 
@@ -92,6 +128,7 @@ void EditWidget::setCurrentPage(int index)
 
 void EditWidget::setHeadline(const QString& text)
 {
+    m_ui->headerLabel->setHidden(text.isEmpty());
     m_ui->headerLabel->setText(text);
 }
 

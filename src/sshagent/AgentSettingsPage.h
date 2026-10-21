@@ -20,13 +20,12 @@
 #define AGENTSETTINGSPAGE_H
 
 #include "gui/ApplicationSettingsWidget.h"
-#include "gui/DatabaseTabWidget.h"
 
 class AgentSettingsPage : public ISettingsPage
 {
 public:
-    AgentSettingsPage(DatabaseTabWidget* tabWidget);
-    ~AgentSettingsPage() override;
+    AgentSettingsPage() = default;
+    ~AgentSettingsPage() override = default;
 
     QString name() override;
     QIcon icon() override;

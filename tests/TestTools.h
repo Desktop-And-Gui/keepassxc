@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,15 +18,34 @@
 #ifndef KEEPASSX_TESTTOOLS_H
 #define KEEPASSX_TESTTOOLS_H
 
-#include "core/Tools.h"
+#include <QObject>
 
 class TestTools : public QObject
 {
     Q_OBJECT
 private slots:
+    void initTestCase();
+    void cleanupTestCase();
     void testHumanReadableFileSize();
     void testIsHex();
     void testIsBase64();
+    void testIsAsciiString();
+    void testEnvSubstitute();
+    void testValidUuid();
+    void testBackupFilePatternSubstitution_data();
+    void testBackupFilePatternSubstitution();
+    void testEscapeRegex();
+    void testEscapeRegex_data();
+    void testConvertToRegex();
+    void testConvertToRegex_data();
+    void testArrayContainsValues();
+    void testMimeTypes();
+    void testGetMimeType();
+    void testGetMimeTypeByFileInfo();
+    void testIsTextMimeType();
+    void testCleanUsername();
+    void testCleanUsername_data();
+    void testEscapeAccelerators();
 };
 
 #endif // KEEPASSX_TESTTOOLS_H

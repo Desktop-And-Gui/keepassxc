@@ -22,8 +22,9 @@
 #include <QTimer>
 #include <QWidget>
 
-#include "core/SignalMultiplexer.h"
 #include "gui/DatabaseWidget.h"
+
+class SignalMultiplexer;
 
 namespace Ui
 {
@@ -52,24 +53,31 @@ protected:
 
 signals:
     void search(const QString& text);
+    void searchCanceled();
     void caseSensitiveChanged(bool state);
     void limitGroupChanged(bool state);
     void escapePressed();
-    void copyPressed();
     void downPressed();
     void enterPressed();
+    void lostFocus();
+    void saveSearch(const QString& text);
 
 public slots:
     void databaseChanged(DatabaseWidget* dbWidget = nullptr);
+    void focusSearch();
+    void clearSearch();
 
 private slots:
+    void onReturnPressed();
     void startSearchTimer();
     void startSearch();
     void updateCaseSensitive();
     void updateLimitGroup();
-    void searchFocus();
     void toggleHelp();
     void showSearchMenu();
+    void resetSearchClearTimer();
+    void performRequestedSearch(const QString& text);
+    void updateSaveButtonVisibility();
 
 private:
     const QScopedPointer<Ui::SearchWidget> m_ui;
@@ -78,6 +86,7 @@ private:
     QTimer* m_clearSearchTimer;
     QAction* m_actionCaseSensitive;
     QAction* m_actionLimitGroup;
+    QAction* m_actionWaitForEnter;
     QMenu* m_searchMenu;
 };
 

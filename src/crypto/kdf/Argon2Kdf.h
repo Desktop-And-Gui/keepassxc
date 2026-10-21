@@ -20,10 +20,21 @@
 
 #include "Kdf.h"
 
+constexpr auto ARGON2_DEFAULT_VERSION = 0x13;
+constexpr auto ARGON2_DEFAULT_ROUNDS = 10;
+constexpr auto ARGON2_DEFAULT_MEMORY = 1 << 16;
+constexpr auto ARGON2_DEFAULT_PARALLELISM = 4;
+
 class Argon2Kdf : public Kdf
 {
 public:
-    Argon2Kdf();
+    enum class Type
+    {
+        Argon2d,
+        Argon2id
+    };
+
+    Argon2Kdf(Type type);
 
     bool processParameters(const QVariantMap& p) override;
     QVariantMap writeParameters() override;
@@ -32,26 +43,27 @@ public:
 
     quint32 version() const;
     bool setVersion(quint32 version);
+    Type type() const;
     quint64 memory() const;
     bool setMemory(quint64 kibibytes);
     quint32 parallelism() const;
     bool setParallelism(quint32 threads);
+    QString toString() const override;
 
-protected:
-    int benchmarkImpl(int msec) const override;
+    int benchmark(int msec) const override;
+
+    static quint64 toMebibytes(quint64 kibibytes)
+    {
+        return kibibytes >> 10;
+    }
+    static quint64 toKibibytes(quint64 mebibits)
+    {
+        return mebibits << 10;
+    }
 
     quint32 m_version;
     quint64 m_memory;
     quint32 m_parallelism;
-
-private:
-    Q_REQUIRED_RESULT static bool transformKeyRaw(const QByteArray& key,
-                                                  const QByteArray& seed,
-                                                  quint32 version,
-                                                  quint32 rounds,
-                                                  quint64 memory,
-                                                  quint32 parallelism,
-                                                  QByteArray& result);
 };
 
 #endif // KEEPASSX_ARGON2KDF_H

@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2012 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,20 +17,19 @@
  */
 
 #include "EntryPreviewWidget.h"
-#include "Font.h"
 #include "ui_EntryPreviewWidget.h"
 
-#include <QDesktopServices>
-#include <QDir>
-
+#include "Application.h"
+#include "core/Clock.h"
 #include "core/Config.h"
-#include "core/FilePath.h"
-#include "entry/EntryAttachmentsModel.h"
-#include "gui/Clipboard.h"
-#if defined(WITH_XC_KEESHARE)
+#include "core/Totp.h"
+#include "gui/Font.h"
+#include "gui/Icons.h"
 #include "keeshare/KeeShare.h"
-#endif
+#include "keeshare/KeeShareSettings.h"
 
+#include <QScrollBar>
+#include <QTabWidget>
 namespace
 {
     constexpr int GeneralTabIndex = 0;
@@ -48,84 +47,172 @@ EntryPreviewWidget::EntryPreviewWidget(QWidget* parent)
     m_ui->setupUi(this);
 
     // Entry
-    m_ui->entryTotpButton->setIcon(filePath()->icon("actions", "chronometer"));
-    m_ui->entryCloseButton->setIcon(filePath()->icon("actions", "dialog-close"));
-    m_ui->entryPasswordLabel->setFont(Font::fixedFont());
-    m_ui->togglePasswordButton->setIcon(filePath()->onOffIcon("actions", "password-show"));
-    m_ui->toggleEntryNotesButton->setIcon(filePath()->onOffIcon("actions", "password-show"));
-    m_ui->toggleGroupNotesButton->setIcon(filePath()->onOffIcon("actions", "password-show"));
+    m_ui->entryTotpButton->setIcon(icons()->icon("totp"));
+    m_ui->entryCloseButton->setIcon(icons()->icon("arrow-collapse-down"));
+    m_ui->toggleUsernameButton->setIcon(icons()->onOffIcon("password-show", true));
+    m_ui->togglePasswordButton->setIcon(icons()->onOffIcon("password-show", true));
+    m_ui->toggleEntryNotesButton->setIcon(icons()->onOffIcon("password-show", true));
+    m_ui->toggleGroupNotesButton->setIcon(icons()->onOffIcon("password-show", true));
 
     m_ui->entryAttachmentsWidget->setReadOnly(true);
     m_ui->entryAttachmentsWidget->setButtonsVisible(false);
 
-    connect(m_ui->entryUrlLabel, SIGNAL(linkActivated(QString)), SLOT(openEntryUrl()));
+    // Match background of read-only text edit fields with the window
+    m_ui->entryPasswordLabel->setBackgroundRole(QPalette::Window);
+    m_ui->entryUsernameLabel->setBackgroundRole(QPalette::Window);
+    m_ui->entryNotesTextEdit->setBackgroundRole(QPalette::Window);
+    m_ui->groupNotesTextEdit->setBackgroundRole(QPalette::Window);
+    // Align notes text with label text
+    m_ui->entryNotesTextEdit->document()->setDocumentMargin(0);
+    m_ui->groupNotesTextEdit->document()->setDocumentMargin(0);
 
-    connect(m_ui->entryTotpButton, SIGNAL(toggled(bool)), m_ui->entryTotpLabel, SLOT(setVisible(bool)));
+    m_ui->entryTotpLabel->installEventFilter(this);
+
+    connect(m_ui->entryTotpButton, SIGNAL(toggled(bool)), m_ui->entryTotp, SLOT(setVisible(bool)));
     connect(m_ui->entryCloseButton, SIGNAL(clicked()), SLOT(hide()));
+    connect(m_ui->toggleUsernameButton, SIGNAL(clicked(bool)), SLOT(setUsernameVisible(bool)));
     connect(m_ui->togglePasswordButton, SIGNAL(clicked(bool)), SLOT(setPasswordVisible(bool)));
     connect(m_ui->toggleEntryNotesButton, SIGNAL(clicked(bool)), SLOT(setEntryNotesVisible(bool)));
     connect(m_ui->toggleGroupNotesButton, SIGNAL(clicked(bool)), SLOT(setGroupNotesVisible(bool)));
     connect(m_ui->entryTabWidget, SIGNAL(tabBarClicked(int)), SLOT(updateTabIndexes()), Qt::QueuedConnection);
+    // Prevent the url from being focused after clicked to allow the Copy Password button to work properly
+    connect(m_ui->entryUrlLabel, &QLabel::linkActivated, this, [this] {
+        openEntryUrl();
+        m_ui->entryTabWidget->setFocus();
+    });
     connect(&m_totpTimer, SIGNAL(timeout()), SLOT(updateTotpLabel()));
 
+    connect(m_ui->entryAttributesTable, &QTableWidget::itemDoubleClicked, this, [this](QTableWidgetItem* item) {
+        auto userData = item->data(Qt::UserRole);
+        if (userData.isValid()) {
+            emit copyTextRequested(userData.toString());
+        }
+    });
+
+    connect(config(), &Config::changed, this, [this](Config::ConfigKey key) {
+        if (key == Config::GUI_HidePreviewPanel) {
+            setVisible(!config()->get(Config::GUI_HidePreviewPanel).toBool());
+        } else if (key == Config::Security_HideTotpPreviewPanel) {
+            m_ui->entryTotpButton->setChecked(!config()->get(Config::Security_HideTotpPreviewPanel).toBool());
+        }
+        refresh();
+    });
+
     // Group
-    m_ui->groupCloseButton->setIcon(filePath()->icon("actions", "dialog-close"));
+    m_ui->groupCloseButton->setIcon(icons()->icon("dialog-close"));
     connect(m_ui->groupCloseButton, SIGNAL(clicked()), SLOT(hide()));
     connect(m_ui->groupTabWidget, SIGNAL(tabBarClicked(int)), SLOT(updateTabIndexes()), Qt::QueuedConnection);
 
-#if !defined(WITH_XC_KEESHARE)
-    removeTab(m_ui->groupTabWidget, m_ui->groupShareTab);
-#endif
+    setFocusProxy(m_ui->entryTabWidget);
 }
 
-EntryPreviewWidget::~EntryPreviewWidget()
+EntryPreviewWidget::~EntryPreviewWidget() = default;
+
+bool EntryPreviewWidget::eventFilter(QObject* object, QEvent* event)
 {
+    if (object == m_ui->entryTotpLabel && event->type() == QEvent::MouseButtonDblClick) {
+        if (m_currentEntry && m_currentEntry->hasTotp()) {
+            emit copyTextRequested(m_currentEntry->totp());
+            m_ui->entryTotpLabel->clearFocus();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(object, event);
+}
+
+void EntryPreviewWidget::clear()
+{
+    hide();
+    m_currentEntry = nullptr;
+    m_currentGroup = nullptr;
+    m_ui->entryAttachmentsWidget->unlinkAttachments();
 }
 
 void EntryPreviewWidget::setEntry(Entry* selectedEntry)
 {
-    if (!selectedEntry) {
+    if (m_currentEntry == selectedEntry) {
+        return;
+    }
+
+    if (m_currentEntry) {
+        disconnect(m_currentEntry, nullptr, this, nullptr);
+    }
+    if (m_currentGroup) {
+        disconnect(m_currentGroup, nullptr, this, nullptr);
+    }
+
+    m_currentEntry = selectedEntry;
+    m_currentGroup = nullptr;
+
+    if (!m_currentEntry) {
         hide();
         return;
     }
 
-    m_currentEntry = selectedEntry;
+    connect(m_currentEntry, &Entry::modified, this, &EntryPreviewWidget::refresh);
+    refresh();
 
-    updateEntryHeaderLine();
-    updateEntryTotp();
-    updateEntryGeneralTab();
-    updateEntryAdvancedTab();
-    updateEntryAutotypeTab();
-
-    setVisible(!config()->get("GUI/HidePreviewPanel").toBool());
-
-    m_ui->stackedWidget->setCurrentWidget(m_ui->pageEntry);
-    const int tabIndex = m_ui->entryTabWidget->isTabEnabled(m_selectedTabEntry) ? m_selectedTabEntry : GeneralTabIndex;
-    Q_ASSERT(m_ui->entryTabWidget->isTabEnabled(GeneralTabIndex));
-    m_ui->entryTabWidget->setCurrentIndex(tabIndex);
+    if (m_currentEntry->hasTotp()) {
+        m_ui->entryTotpButton->setChecked(!config()->get(Config::Security_HideTotpPreviewPanel).toBool());
+    }
 }
 
 void EntryPreviewWidget::setGroup(Group* selectedGroup)
 {
-    if (!selectedGroup) {
+    if (m_currentGroup == selectedGroup) {
+        return;
+    }
+
+    if (m_currentEntry) {
+        disconnect(m_currentEntry, nullptr, this, nullptr);
+    }
+    if (m_currentGroup) {
+        disconnect(m_currentGroup, nullptr, this, nullptr);
+    }
+
+    m_currentEntry = nullptr;
+    m_currentGroup = selectedGroup;
+
+    if (!m_currentGroup) {
         hide();
         return;
     }
 
-    m_currentGroup = selectedGroup;
-    updateGroupHeaderLine();
-    updateGroupGeneralTab();
+    connect(m_currentGroup, &Group::modified, this, &EntryPreviewWidget::refresh);
+    refresh();
+}
 
-#if defined(WITH_XC_KEESHARE)
-    updateGroupSharingTab();
-#endif
+void EntryPreviewWidget::refresh()
+{
+    if (m_currentEntry) {
+        updateEntryHeaderLine();
+        updateEntryTotp();
+        updateEntryGeneralTab();
+        updateEntryAdvancedTab();
+        updateEntryAutotypeTab();
 
-    setVisible(!config()->get("GUI/HidePreviewPanel").toBool());
+        setVisible(!config()->get(Config::GUI_HidePreviewPanel).toBool());
 
-    m_ui->stackedWidget->setCurrentWidget(m_ui->pageGroup);
-    const int tabIndex = m_ui->groupTabWidget->isTabEnabled(m_selectedTabGroup) ? m_selectedTabGroup : GeneralTabIndex;
-    Q_ASSERT(m_ui->groupTabWidget->isTabEnabled(GeneralTabIndex));
-    m_ui->groupTabWidget->setCurrentIndex(tabIndex);
+        m_ui->stackedWidget->setCurrentWidget(m_ui->pageEntry);
+        const int tabIndex =
+            m_ui->entryTabWidget->isTabEnabled(m_selectedTabEntry) ? m_selectedTabEntry : GeneralTabIndex;
+        Q_ASSERT(m_ui->entryTabWidget->isTabEnabled(GeneralTabIndex));
+        m_ui->entryTabWidget->setCurrentIndex(tabIndex);
+    } else if (m_currentGroup) {
+        updateGroupHeaderLine();
+        updateGroupGeneralTab();
+        updateGroupSharingTab();
+
+        setVisible(!config()->get(Config::GUI_HidePreviewPanel).toBool());
+
+        m_ui->stackedWidget->setCurrentWidget(m_ui->pageGroup);
+        const int tabIndex =
+            m_ui->groupTabWidget->isTabEnabled(m_selectedTabGroup) ? m_selectedTabGroup : GeneralTabIndex;
+        Q_ASSERT(m_ui->groupTabWidget->isTabEnabled(GeneralTabIndex));
+        m_ui->groupTabWidget->setCurrentIndex(tabIndex);
+    } else {
+        hide();
+    }
 }
 
 void EntryPreviewWidget::setDatabaseMode(DatabaseWidget::Mode mode)
@@ -136,10 +223,12 @@ void EntryPreviewWidget::setDatabaseMode(DatabaseWidget::Mode mode)
     }
 
     if (mode == DatabaseWidget::Mode::ViewMode) {
-        if (m_ui->stackedWidget->currentWidget() == m_ui->pageGroup) {
+        if (m_currentGroup && m_ui->stackedWidget->currentWidget() == m_ui->pageGroup) {
             setGroup(m_currentGroup);
-        } else {
+        } else if (m_currentEntry) {
             setEntry(m_currentEntry);
+        } else {
+            hide();
         }
     }
 }
@@ -149,7 +238,7 @@ void EntryPreviewWidget::updateEntryHeaderLine()
     Q_ASSERT(m_currentEntry);
     const QString title = m_currentEntry->resolveMultiplePlaceholders(m_currentEntry->title());
     m_ui->entryTitleLabel->setRawText(hierarchy(m_currentEntry->group(), title));
-    m_ui->entryIcon->setPixmap(preparePixmap(m_currentEntry->iconPixmap(), 16));
+    m_ui->entryIcon->setPixmap(Icons::entryIconPixmap(m_currentEntry, IconSize::Large));
 }
 
 void EntryPreviewWidget::updateEntryTotp()
@@ -157,73 +246,120 @@ void EntryPreviewWidget::updateEntryTotp()
     Q_ASSERT(m_currentEntry);
     const bool hasTotp = m_currentEntry->hasTotp();
     m_ui->entryTotpButton->setVisible(hasTotp);
-    m_ui->entryTotpLabel->hide();
-    m_ui->entryTotpButton->setChecked(false);
 
     if (hasTotp) {
         m_totpTimer.start(1000);
+        m_ui->entryTotpProgress->setMaximum(m_currentEntry->totpSettings()->step);
         updateTotpLabel();
+        m_ui->entryTotp->setVisible(m_ui->entryTotpButton->isChecked());
     } else {
+        m_ui->entryTotp->hide();
+        m_ui->entryTotpButton->setChecked(false);
         m_ui->entryTotpLabel->clear();
         m_totpTimer.stop();
     }
 }
 
+void EntryPreviewWidget::setUsernameVisible(bool state)
+{
+    if (state) {
+        auto username = m_currentEntry->resolveMultiplePlaceholders(m_currentEntry->username());
+        m_ui->entryUsernameLabel->setText(username);
+        m_ui->entryUsernameLabel->setFont(Font::defaultFont());
+        m_ui->entryUsernameLabel->setCursorPosition(0);
+    } else {
+        m_ui->entryUsernameLabel->setText(QString("\u25cf").repeated(6));
+        m_ui->entryUsernameLabel->setFont(Font::fixedFont());
+    }
+
+    m_ui->toggleUsernameButton->setIcon(icons()->onOffIcon("password-show", state));
+}
+
 void EntryPreviewWidget::setPasswordVisible(bool state)
 {
+    m_ui->entryPasswordLabel->setFont(Font::fixedFont());
+
     const QString password = m_currentEntry->resolveMultiplePlaceholders(m_currentEntry->password());
     if (state) {
-        m_ui->entryPasswordLabel->setRawText(password);
-        m_ui->entryPasswordLabel->setToolTip(password);
-        m_ui->entryPasswordLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    } else {
-        m_ui->entryPasswordLabel->setTextInteractionFlags(Qt::NoTextInteraction);
-        m_ui->entryPasswordLabel->setToolTip({});
-        if (password.isEmpty() && config()->get("security/passwordemptynodots").toBool()) {
-            m_ui->entryPasswordLabel->setRawText("");
+        if (config()->get(Config::GUI_ColorPasswords).toBool()) {
+            // Show the password in color
+            // clang-format off
+            QString html;
+            const auto dark = kpxcApp->isDarkTheme();
+            for (const auto c : password) {
+                const auto color = c.isDigit()   ? (dark ? "lightblue" : "blue")
+                                   : c.isUpper() ? (dark ? "lightgreen" : "darkgreen")
+                                   : c.isLower() ? (dark ? "yellow" : "red")
+                                                 : (dark ? "white" : "black");
+                html += "<span style=\"color: " + QString(color) + ";\">" + QString(c).toHtmlEscaped() + "</span>";
+            }
+            // clang-format on
+            m_ui->entryPasswordLabel->setTextFormat(Qt::RichText);
+            m_ui->entryPasswordLabel->setText(html);
         } else {
-            m_ui->entryPasswordLabel->setRawText(QString("\u25cf").repeated(6));
+            // No color
+            m_ui->entryPasswordLabel->setTextFormat(Qt::PlainText);
+            m_ui->entryPasswordLabel->setText(password);
         }
+    } else if (password.isEmpty() && !config()->get(Config::Security_PasswordEmptyPlaceholder).toBool()) {
+        m_ui->entryPasswordLabel->setText("");
+    } else {
+        m_ui->entryPasswordLabel->setText(QString("\u25cf").repeated(6));
     }
+
+    m_ui->passwordScrollArea->setMaximumHeight(m_ui->entryPasswordLabel->sizeHint().height()
+                                               + m_ui->passwordScrollArea->horizontalScrollBar()->sizeHint().height());
+
+    m_ui->togglePasswordButton->setIcon(icons()->onOffIcon("password-show", state));
 }
 
 void EntryPreviewWidget::setEntryNotesVisible(bool state)
 {
-    setNotesVisible(m_ui->entryNotesLabel, m_currentEntry->notes(), state);
+    setNotesVisible(
+        m_ui->entryNotesTextEdit, m_currentEntry->resolveMultiplePlaceholders(m_currentEntry->notes()), state);
+    m_ui->toggleEntryNotesButton->setIcon(icons()->onOffIcon("password-show", state));
 }
 
 void EntryPreviewWidget::setGroupNotesVisible(bool state)
 {
-    setNotesVisible(m_ui->groupNotesLabel, m_currentGroup->notes(), state);
+    setNotesVisible(m_ui->groupNotesTextEdit, m_currentGroup->notes(), state);
+    m_ui->toggleGroupNotesButton->setIcon(icons()->onOffIcon("password-show", state));
 }
 
-void EntryPreviewWidget::setNotesVisible(QLabel* notesLabel, const QString& notes, bool state)
+void EntryPreviewWidget::setNotesVisible(QTextEdit* notesWidget, const QString& notes, bool state)
 {
     if (state) {
-        // Add html hyperlinks to notes that start with XXXX://
-        QString hyperlinkNotes = notes;
-        notesLabel->setText(hyperlinkNotes.replace(QRegExp("(\\w+:\\/\\/\\S+)"), "<a href=\"\\1\">\\1</a>"));
-        notesLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
+        notesWidget->setPlainText(notes);
+        notesWidget->moveCursor(QTextCursor::Start);
+        notesWidget->ensureCursorVisible();
     } else {
-        if (notes.isEmpty()) {
-            notesLabel->setText("");
+        if (!notes.isEmpty()) {
+            notesWidget->setPlainText(QString("\u25cf").repeated(6));
         } else {
-            notesLabel->setText(QString("\u25cf").repeated(6));
+            notesWidget->setPlainText("");
         }
-        notesLabel->setTextInteractionFlags(Qt::NoTextInteraction);
     }
 }
 
 void EntryPreviewWidget::updateEntryGeneralTab()
 {
     Q_ASSERT(m_currentEntry);
-    m_ui->entryUsernameLabel->setText(m_currentEntry->resolveMultiplePlaceholders(m_currentEntry->username()));
 
-    if (config()->get("security/HidePasswordPreviewPanel").toBool()) {
+    if (config()->get(Config::GUI_HideUsernames).toBool()) {
+        setUsernameVisible(false);
+        // Show the username toggle button
+        m_ui->toggleUsernameButton->setVisible(!m_currentEntry->username().isEmpty());
+        m_ui->toggleUsernameButton->setChecked(false);
+    } else {
+        setUsernameVisible(true);
+        m_ui->toggleUsernameButton->setVisible(false);
+    }
+
+    if (config()->get(Config::Security_HidePasswordPreviewPanel).toBool()) {
         // Hide password
         setPasswordVisible(false);
         // Show the password toggle button if there are dots in the label
-        m_ui->togglePasswordButton->setVisible(!m_ui->entryPasswordLabel->rawText().isEmpty());
+        m_ui->togglePasswordButton->setVisible(!m_currentEntry->password().isEmpty());
         m_ui->togglePasswordButton->setChecked(false);
     } else {
         // Show password
@@ -231,22 +367,24 @@ void EntryPreviewWidget::updateEntryGeneralTab()
         m_ui->togglePasswordButton->setVisible(false);
     }
 
-    if (config()->get("security/hidenotes").toBool()) {
-        setEntryNotesVisible(false);
-        m_ui->toggleEntryNotesButton->setVisible(!m_ui->entryNotesLabel->text().isEmpty());
-        m_ui->toggleEntryNotesButton->setChecked(false);
+    auto hasNotes = !m_currentEntry->notes().isEmpty();
+    auto hideNotes = config()->get(Config::Security_HideNotes).toBool();
+
+    setEntryNotesVisible(hasNotes && !hideNotes);
+    m_ui->toggleEntryNotesButton->setVisible(hasNotes && hideNotes
+                                             && !m_ui->entryNotesTextEdit->toPlainText().isEmpty());
+    m_ui->toggleEntryNotesButton->setChecked(false);
+
+    if (config()->get(Config::GUI_MonospaceNotes).toBool()) {
+        m_ui->entryNotesTextEdit->setFont(Font::fixedFont());
     } else {
-        setEntryNotesVisible(true);
-        m_ui->toggleEntryNotesButton->setVisible(false);
+        m_ui->entryNotesTextEdit->setFont(Font::defaultFont());
     }
 
-    if (config()->get("GUI/MonospaceNotes", false).toBool()) {
-        m_ui->entryNotesLabel->setFont(Font::fixedFont());
-    } else {
-        m_ui->entryNotesLabel->setFont(Font::defaultFont());
-    }
+    m_ui->entryNotesTextEdit->setTabStopDistance(
+        QFontMetrics(m_ui->entryNotesTextEdit->font()).horizontalAdvance(QString(4, ' ')));
 
-    m_ui->entryUrlLabel->setRawText(m_currentEntry->displayUrl());
+    m_ui->entryUrlLabel->setRawText(m_currentEntry->displayUrl().toHtmlEscaped());
     const QString url = m_currentEntry->url();
     if (!url.isEmpty()) {
         // URL is well formed and can be opened in a browser
@@ -259,39 +397,84 @@ void EntryPreviewWidget::updateEntryGeneralTab()
     }
 
     const TimeInfo entryTime = m_currentEntry->timeInfo();
-    const QString expires =
-        entryTime.expires() ? entryTime.expiryTime().toLocalTime().toString(Qt::DefaultLocaleShortDate) : tr("Never");
+    const QString expires = entryTime.expires() ? Clock::toString(entryTime.expiryTime().toLocalTime()) : tr("Never");
     m_ui->entryExpirationLabel->setText(expires);
+    m_ui->entryTagsList->tags(m_currentEntry->tagList());
+    m_ui->entryTagsList->setReadOnly(true);
 }
 
 void EntryPreviewWidget::updateEntryAdvancedTab()
 {
     Q_ASSERT(m_currentEntry);
-    m_ui->entryAttributesEdit->clear();
+    m_ui->entryAttributesTable->clear();
+
     const EntryAttributes* attributes = m_currentEntry->attributes();
     const QStringList customAttributes = attributes->customKeys();
     const bool hasAttributes = !customAttributes.isEmpty();
     const bool hasAttachments = !m_currentEntry->attachments()->isEmpty();
+    m_ui->entryAttributesTable->setRowCount(customAttributes.size());
+    m_ui->entryAttributesTable->setColumnCount(3);
 
     setTabEnabled(m_ui->entryTabWidget, m_ui->entryAdvancedTab, hasAttributes || hasAttachments);
     if (hasAttributes) {
-        QString attributesText;
+        auto i = 0;
+        QFont font;
+        font.setBold(true);
         for (const QString& key : customAttributes) {
-            QString value = m_currentEntry->attributes()->value(key);
-            if (m_currentEntry->attributes()->isProtected(key)) {
-                value = "<i>" + tr("[PROTECTED]") + "</i>";
+            m_ui->entryAttributesTable->setItem(i, 0, new QTableWidgetItem(key));
+            m_ui->entryAttributesTable->item(i, 0)->setFont(font);
+            m_ui->entryAttributesTable->item(i, 0)->setTextAlignment(Qt::AlignTop | Qt::AlignLeft);
+
+            auto value = m_currentEntry->resolveMultiplePlaceholders(attributes->value(key));
+
+            if (attributes->isProtected(key)) {
+                // only show the reveal button on protected attributes
+                auto button = new QToolButton();
+                button->setCheckable(true);
+                button->setChecked(false);
+                button->setIcon(icons()->onOffIcon("password-show", false));
+                button->setProperty("row", i);
+                button->setIconSize({12, 12});
+                connect(button, &QToolButton::clicked, this, [this](bool state) {
+                    auto btn = qobject_cast<QToolButton*>(sender());
+                    btn->setIcon(icons()->onOffIcon("password-show", state));
+                    auto item = m_ui->entryAttributesTable->item(btn->property("row").toInt(), 2);
+                    if (state) {
+                        item->setText(item->data(Qt::UserRole).toString());
+                    } else {
+                        item->setText(QString("\u25cf").repeated(6));
+                    }
+                    // Maintain button height while showing contents of cell
+                    auto size = btn->size();
+                    m_ui->entryAttributesTable->resizeRowToContents(item->row());
+                    btn->setFixedSize(size);
+                });
+
+                m_ui->entryAttributesTable->setCellWidget(i, 1, button);
+                m_ui->entryAttributesTable->setItem(i, 2, new QTableWidgetItem(QString("\u25cf").repeated(6)));
+            } else {
+                m_ui->entryAttributesTable->setItem(i, 2, new QTableWidgetItem(value));
             }
-            attributesText.append(tr("<b>%1</b>: %2", "attributes line").arg(key, value).append("<br/>"));
+
+            m_ui->entryAttributesTable->item(i, 2)->setData(Qt::UserRole, value);
+            m_ui->entryAttributesTable->item(i, 2)->setToolTip(tr("Double click to copy value"));
+            m_ui->entryAttributesTable->item(i, 2)->setTextAlignment(Qt::AlignTop | Qt::AlignLeft);
+
+            ++i;
         }
-        m_ui->entryAttributesEdit->setText(attributesText);
     }
 
-    m_ui->entryAttachmentsWidget->setEntryAttachments(m_currentEntry->attachments());
+    m_ui->entryAttributesTable->horizontalHeader()->setStretchLastSection(true);
+    m_ui->entryAttributesTable->resizeColumnsToContents();
+    m_ui->entryAttributesTable->resizeRowsToContents();
+    m_ui->entryAttachmentsWidget->linkAttachments(m_currentEntry->attachments());
 }
 
 void EntryPreviewWidget::updateEntryAutotypeTab()
 {
     Q_ASSERT(m_currentEntry);
+
+    m_ui->entrySequenceLabel->setText(m_currentEntry->effectiveAutoTypeSequence());
     m_ui->entryAutotypeTree->clear();
     QList<QTreeWidgetItem*> items;
     const AutoTypeAssociations* autotypeAssociations = m_currentEntry->autoTypeAssociations();
@@ -303,14 +486,16 @@ void EntryPreviewWidget::updateEntryAutotypeTab()
     }
 
     m_ui->entryAutotypeTree->addTopLevelItems(items);
-    setTabEnabled(m_ui->entryTabWidget, m_ui->entryAutotypeTab, !items.isEmpty());
+    setTabEnabled(m_ui->entryTabWidget,
+                  m_ui->entryAutotypeTab,
+                  m_currentEntry->autoTypeEnabled() && m_currentEntry->groupAutoTypeEnabled());
 }
 
 void EntryPreviewWidget::updateGroupHeaderLine()
 {
     Q_ASSERT(m_currentGroup);
     m_ui->groupTitleLabel->setRawText(hierarchy(m_currentGroup, {}));
-    m_ui->groupIcon->setPixmap(preparePixmap(m_currentGroup->iconPixmap(), 32));
+    m_ui->groupIcon->setPixmap(Icons::groupIconPixmap(m_currentGroup, IconSize::Large));
 }
 
 void EntryPreviewWidget::updateGroupGeneralTab()
@@ -323,27 +508,25 @@ void EntryPreviewWidget::updateGroupGeneralTab()
     m_ui->groupAutotypeLabel->setText(autotypeText);
 
     const TimeInfo groupTime = m_currentGroup->timeInfo();
-    const QString expiresText =
-        groupTime.expires() ? groupTime.expiryTime().toString(Qt::DefaultLocaleShortDate) : tr("Never");
+    const QString expiresText = groupTime.expires() ? Clock::toString(groupTime.expiryTime()) : tr("Never");
     m_ui->groupExpirationLabel->setText(expiresText);
 
-    if (config()->get("security/hidenotes").toBool()) {
+    if (config()->get(Config::Security_HideNotes).toBool()) {
         setGroupNotesVisible(false);
-        m_ui->toggleGroupNotesButton->setVisible(!m_ui->groupNotesLabel->text().isEmpty());
+        m_ui->toggleGroupNotesButton->setVisible(!m_ui->groupNotesTextEdit->toPlainText().isEmpty());
         m_ui->toggleGroupNotesButton->setChecked(false);
     } else {
         setGroupNotesVisible(true);
         m_ui->toggleGroupNotesButton->setVisible(false);
     }
 
-    if (config()->get("GUI/MonospaceNotes", false).toBool()) {
-        m_ui->groupNotesLabel->setFont(Font::fixedFont());
+    if (config()->get(Config::GUI_MonospaceNotes).toBool()) {
+        m_ui->groupNotesTextEdit->setFont(Font::fixedFont());
     } else {
-        m_ui->groupNotesLabel->setFont(Font::defaultFont());
+        m_ui->groupNotesTextEdit->setFont(Font::defaultFont());
     }
 }
 
-#if defined(WITH_XC_KEESHARE)
 void EntryPreviewWidget::updateGroupSharingTab()
 {
     Q_ASSERT(m_currentGroup);
@@ -352,17 +535,27 @@ void EntryPreviewWidget::updateGroupSharingTab()
     m_ui->groupShareTypeLabel->setText(KeeShare::referenceTypeLabel(reference));
     m_ui->groupSharePathLabel->setText(reference.path);
 }
-#endif
 
 void EntryPreviewWidget::updateTotpLabel()
 {
     if (!m_locked && m_currentEntry && m_currentEntry->hasTotp()) {
-        const QString totpCode = m_currentEntry->totp();
-        const QString firstHalf = totpCode.left(totpCode.size() / 2);
-        const QString secondHalf = totpCode.mid(totpCode.size() / 2);
-        m_ui->entryTotpLabel->setText(firstHalf + " " + secondHalf);
+        bool isValid = false;
+        auto totpCode = m_currentEntry->totp(&isValid);
+        if (isValid) {
+            totpCode.insert(totpCode.size() / 2, " ");
+
+            auto step = m_currentEntry->totpSettings()->step;
+            auto timeleft = step - (Clock::currentSecondsSinceEpoch() % step);
+            m_ui->entryTotpProgress->setValue(timeleft);
+            m_ui->entryTotpProgress->update();
+        } else {
+            m_totpTimer.stop();
+        }
+
+        m_ui->entryTotpProgress->setVisible(isValid);
+        m_ui->entryTotpLabel->setText(totpCode);
     } else {
-        m_ui->entryTotpLabel->clear();
+        m_ui->entryTotp->setVisible(false);
         m_totpTimer.stop();
     }
 }
@@ -380,13 +573,6 @@ void EntryPreviewWidget::openEntryUrl()
     }
 }
 
-void EntryPreviewWidget::removeTab(QTabWidget* tabWidget, QWidget* widget)
-{
-    const int tabIndex = tabWidget->indexOf(widget);
-    Q_ASSERT(tabIndex != -1);
-    tabWidget->removeTab(tabIndex);
-}
-
 void EntryPreviewWidget::setTabEnabled(QTabWidget* tabWidget, QWidget* widget, bool enabled)
 {
     const int tabIndex = tabWidget->indexOf(widget);
@@ -394,19 +580,11 @@ void EntryPreviewWidget::setTabEnabled(QTabWidget* tabWidget, QWidget* widget, b
     tabWidget->setTabEnabled(tabIndex, enabled);
 }
 
-QPixmap EntryPreviewWidget::preparePixmap(const QPixmap& pixmap, int size)
-{
-    if (pixmap.width() > size || pixmap.height() > size) {
-        return pixmap.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    }
-    return pixmap;
-}
-
 QString EntryPreviewWidget::hierarchy(const Group* group, const QString& title)
 {
-    const QString separator("] > [");
-    QStringList hierarchy = group->hierarchy();
-    QString groupList = QString("[%1]").arg(hierarchy.join(separator));
-
-    return title.isEmpty() ? groupList : QString("%1 > %2").arg(groupList, title);
+    if (group) {
+        QString groupList = QString("%1").arg(group->hierarchy().join(" / "));
+        return title.isEmpty() ? groupList : QString("%1 / %2").arg(groupList, title);
+    }
+    return {};
 }

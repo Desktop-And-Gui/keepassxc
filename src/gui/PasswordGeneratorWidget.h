@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 2013 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2022 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,8 +20,7 @@
 #define KEEPASSX_PASSWORDGENERATORWIDGET_H
 
 #include <QComboBox>
-#include <QLabel>
-#include <QWidget>
+#include <QTimer>
 
 #include "core/PassphraseGenerator.h"
 #include "core/PasswordGenerator.h"
@@ -32,6 +31,7 @@ namespace Ui
 }
 
 class PasswordGenerator;
+class PasswordHealth;
 class PassphraseGenerator;
 
 class PasswordGeneratorWidget : public QWidget
@@ -44,46 +44,51 @@ public:
         Password = 0,
         Diceware = 1
     };
+
     explicit PasswordGeneratorWidget(QWidget* parent = nullptr);
-    ~PasswordGeneratorWidget();
+    ~PasswordGeneratorWidget() override;
+
     void loadSettings();
     void saveSettings();
-    void reset(int length = 0);
+    void setPasswordLength(int length);
     void setStandaloneMode(bool standalone);
     QString getGeneratedPassword();
     bool isPasswordVisible() const;
+    bool isPasswordGenerated() const;
 
-protected:
-    void showEvent(QShowEvent* event) override;
+    static PasswordGeneratorWidget* popupGenerator(QWidget* parent = nullptr);
+
+signals:
+    void appliedPassword(const QString& password);
+    void closed();
 
 public slots:
     void regeneratePassword();
     void applyPassword();
     void copyPassword();
     void setPasswordVisible(bool visible);
+    void removeCustomWordList();
+    void addWordList();
 
-signals:
-    void appliedPassword(const QString& password);
-    void dialogTerminated();
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private slots:
     void updateButtonsEnabled(const QString& password);
-    void updatePasswordStrength(const QString& password);
-    void selectSimpleMode();
-    void selectAdvancedMode();
+    void updatePasswordStrength();
+    void updatePasswordLengthLabel(const QString& password);
+    void setAdvancedMode(bool advanced);
     void excludeHexChars();
 
-    void passwordSliderMoved();
-    void passwordSpinBoxChanged();
-    void dicewareSliderMoved();
-    void dicewareSpinBoxChanged();
-    void colorStrengthIndicator(double entropy);
+    void passwordLengthChanged(int length);
+    void passphraseLengthChanged(int length);
 
     void updateGenerator();
 
 private:
-    bool m_updatingSpinBox;
     bool m_standalone = false;
+    bool m_passwordGenerated = false;
+    int m_firstCustomWordlistIndex;
 
     PasswordGenerator::CharClasses charClasses();
     PasswordGenerator::GeneratorFlags generatorFlags();
@@ -91,9 +96,6 @@ private:
     const QScopedPointer<PasswordGenerator> m_passwordGenerator;
     const QScopedPointer<PassphraseGenerator> m_dicewareGenerator;
     const QScopedPointer<Ui::PasswordGeneratorWidget> m_ui;
-
-protected:
-    void keyPressEvent(QKeyEvent* e) override;
 };
 
 #endif // KEEPASSX_PASSWORDGENERATORWIDGET_H

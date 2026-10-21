@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -17,13 +17,17 @@
  */
 
 #include "CompositeKey.h"
-#include <QFile>
-#include <QtConcurrent>
-#include <format/KeePass2.h>
 
-#include "core/Global.h"
 #include "crypto/CryptoHash.h"
-#include "crypto/kdf/AesKdf.h"
+#include "crypto/kdf/Kdf.h"
+#include "format/KeePass2.h"
+#include "keys/ChallengeResponseKey.h"
+#include "keys/FileKey.h"
+#include "keys/PasswordKey.h"
+
+#include <QDataStream>
+#include <QDebug>
+#include <QIODevice>
 
 QUuid CompositeKey::UUID("76a7ae25-a542-4add-9849-7c06be945b94");
 
@@ -60,7 +64,12 @@ bool CompositeKey::isEmpty() const
  */
 QByteArray CompositeKey::rawKey() const
 {
-    return rawKey(nullptr, nullptr);
+    return rawKey(nullptr);
+}
+
+void CompositeKey::setRawKey(const QByteArray& data)
+{
+    deserialize(data);
 }
 
 /**
@@ -73,7 +82,7 @@ QByteArray CompositeKey::rawKey() const
  * @param ok true if challenges were successful and all key components could be added to the composite key
  * @return key hash
  */
-QByteArray CompositeKey::rawKey(const QByteArray* transformSeed, bool* ok) const
+QByteArray CompositeKey::rawKey(const QByteArray* transformSeed, bool* ok, QString* error) const
 {
     CryptoHash cryptoHash(CryptoHash::Sha256);
 
@@ -87,7 +96,7 @@ QByteArray CompositeKey::rawKey(const QByteArray* transformSeed, bool* ok) const
 
     if (transformSeed) {
         QByteArray challengeResult;
-        bool challengeOk = challenge(*transformSeed, challengeResult);
+        bool challengeOk = challenge(*transformSeed, challengeResult, error);
         if (ok) {
             *ok = challengeOk;
         }
@@ -110,7 +119,7 @@ QByteArray CompositeKey::rawKey(const QByteArray* transformSeed, bool* ok) const
  * @param result transformed key hash
  * @return true on success
  */
-bool CompositeKey::transform(const Kdf& kdf, QByteArray& result) const
+bool CompositeKey::transform(const Kdf& kdf, QByteArray& result, QString* error) const
 {
     if (kdf.uuid() == KeePass2::KDF_AES_KDBX3) {
         // legacy KDBX3 AES-KDF, challenge response is added later to the hash
@@ -120,10 +129,10 @@ bool CompositeKey::transform(const Kdf& kdf, QByteArray& result) const
     QByteArray seed = kdf.seed();
     Q_ASSERT(!seed.isEmpty());
     bool ok = false;
-    return kdf.transform(rawKey(&seed, &ok), result) && ok;
+    return kdf.transform(rawKey(&seed, &ok, error), result) && ok;
 }
 
-bool CompositeKey::challenge(const QByteArray& seed, QByteArray& result) const
+bool CompositeKey::challenge(const QByteArray& seed, QByteArray& result, QString* error) const
 {
     // if no challenge response was requested, return nothing to
     // maintain backwards compatibility with regular databases.
@@ -137,7 +146,10 @@ bool CompositeKey::challenge(const QByteArray& seed, QByteArray& result) const
     for (const auto& key : m_challengeResponseKeys) {
         // if the device isn't present or fails, return an error
         if (!key->challenge(seed)) {
-            qWarning("Failed to issue challenge");
+            if (error) {
+                *error = key->error();
+            }
+            qWarning() << "Failed to issue challenge: " << key->error();
             return false;
         }
         cryptoHash.addData(key->rawKey());
@@ -156,6 +168,36 @@ bool CompositeKey::challenge(const QByteArray& seed, QByteArray& result) const
 void CompositeKey::addKey(const QSharedPointer<Key>& key)
 {
     m_keys.append(key);
+}
+
+/**
+ * Get the \link Key with the specified ID.
+ *
+ * @param keyId the ID of the key to get.
+ */
+QSharedPointer<Key> CompositeKey::getKey(const QUuid keyId) const
+{
+    for (const QSharedPointer<Key>& key : m_keys) {
+        if (key->uuid() == keyId) {
+            return key;
+        }
+    }
+    return {};
+}
+
+/**
+ * Get the \link ChallengeResponseKey with the specified ID.
+ *
+ * @param keyId the ID of the key to get.
+ */
+QSharedPointer<ChallengeResponseKey> CompositeKey::getChallengeResponseKey(const QUuid keyId) const
+{
+    for (const QSharedPointer<ChallengeResponseKey>& key : m_challengeResponseKeys) {
+        if (key->uuid() == keyId) {
+            return key;
+        }
+    }
+    return {};
 }
 
 /**
@@ -184,4 +226,62 @@ void CompositeKey::addChallengeResponseKey(const QSharedPointer<ChallengeRespons
 const QList<QSharedPointer<ChallengeResponseKey>>& CompositeKey::challengeResponseKeys() const
 {
     return m_challengeResponseKeys;
+}
+
+QByteArray CompositeKey::serialize() const
+{
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::WriteOnly);
+    // Write Composite Key UUID then each sub-key UUID and data
+    stream << uuid().toRfc4122();
+    for (auto const& key : m_keys) {
+        stream << key->uuid().toRfc4122() << key->serialize();
+    }
+    for (auto const& key : m_challengeResponseKeys) {
+        stream << key->uuid().toRfc4122() << key->serialize();
+    }
+    return data;
+}
+
+void CompositeKey::deserialize(const QByteArray& data)
+{
+    QByteArray uuidData;
+    QByteArray keyData;
+
+    QDataStream stream(data);
+    // Verify this is a valid composite key data stream
+    stream >> uuidData;
+    if (uuid().toRfc4122() != uuidData) {
+        return;
+    }
+
+    // Clear existing keys
+    m_keys.clear();
+    m_challengeResponseKeys.clear();
+
+    while (!stream.atEnd()) {
+        // Read the UUID first to construct the key
+        stream >> uuidData;
+        auto uuid = QUuid::fromRfc4122(uuidData);
+
+        if (uuid == ChallengeResponseKey::UUID) {
+            stream >> keyData;
+            auto key = QSharedPointer<ChallengeResponseKey>::create();
+            key->deserialize(keyData);
+            m_challengeResponseKeys.append(key);
+        } else if (uuid == PasswordKey::UUID) {
+            stream >> keyData;
+            auto key = QSharedPointer<PasswordKey>::create();
+            key->deserialize(keyData);
+            m_keys << key;
+        } else if (uuid == FileKey::UUID) {
+            stream >> keyData;
+            auto key = QSharedPointer<FileKey>::create();
+            key->deserialize(keyData);
+            m_keys << key;
+        } else {
+            // Unsupported key type, discard key data
+            stream >> keyData;
+        }
+    }
 }

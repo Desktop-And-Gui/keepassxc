@@ -20,50 +20,55 @@
 
 #include <QBuffer>
 
-#include "core/Database.h"
 #include "crypto/CryptoHash.h"
 #include "crypto/Random.h"
 #include "format/KdbxXmlWriter.h"
-#include "format/KeePass2.h"
 #include "format/KeePass2RandomStream.h"
 #include "streams/HashedBlockStream.h"
-#include "streams/QtIOCompressor"
 #include "streams/SymmetricCipherStream.h"
+#include "streams/qtiocompressor.h"
 
 bool Kdbx3Writer::writeDatabase(QIODevice* device, Database* db)
 {
     m_error = false;
     m_errorStr.clear();
 
+    auto mode = SymmetricCipher::cipherUuidToMode(db->cipher());
+    int ivSize = SymmetricCipher::defaultIvSize(mode);
+    if (ivSize < 0) {
+        raiseError(tr("Invalid symmetric cipher IV size.", "IV = Initialization Vector for symmetric cipher"));
+        return false;
+    }
+
     QByteArray masterSeed = randomGen()->randomArray(32);
-    QByteArray encryptionIV = randomGen()->randomArray(16);
+    QByteArray encryptionIV = randomGen()->randomArray(ivSize);
     QByteArray protectedStreamKey = randomGen()->randomArray(32);
     QByteArray startBytes = randomGen()->randomArray(32);
     QByteArray endOfHeader = "\r\n\r\n";
 
     if (!db->challengeMasterSeed(masterSeed)) {
-        raiseError(tr("Unable to issue challenge-response."));
+        raiseError(tr("Unable to issue challenge-response: %1").arg(db->keyError()));
         return false;
     }
 
     if (!db->setKey(db->key(), false, true)) {
-        raiseError(tr("Unable to calculate master key"));
+        raiseError(tr("Unable to calculate database key"));
         return false;
     }
 
-    // generate transformed master key
+    // generate transformed database key
     CryptoHash hash(CryptoHash::Sha256);
     hash.addData(masterSeed);
     hash.addData(db->challengeResponseKey());
-    Q_ASSERT(!db->transformedMasterKey().isEmpty());
-    hash.addData(db->transformedMasterKey());
+    Q_ASSERT(!db->transformedDatabaseKey().isEmpty());
+    hash.addData(db->transformedDatabaseKey());
     QByteArray finalKey = hash.result();
 
     // write header
     QBuffer header;
     header.open(QIODevice::WriteOnly);
 
-    writeMagicNumbers(&header, KeePass2::SIGNATURE_1, KeePass2::SIGNATURE_2, formatVersion());
+    writeMagicNumbers(&header, KeePass2::SIGNATURE_1, KeePass2::SIGNATURE_2, db->formatVersion());
 
     CHECK_RETURN_FALSE(writeHeaderField<quint16>(&header, KeePass2::HeaderFieldID::CipherID, db->cipher().toRfc4122()));
     CHECK_RETURN_FALSE(
@@ -95,9 +100,8 @@ bool Kdbx3Writer::writeDatabase(QIODevice* device, Database* db)
     const QByteArray headerHash = CryptoHash::hash(header.data(), CryptoHash::Sha256);
 
     // write cipher stream
-    SymmetricCipher::Algorithm algo = SymmetricCipher::cipherToAlgorithm(db->cipher());
-    SymmetricCipherStream cipherStream(device, algo, SymmetricCipher::algorithmMode(algo), SymmetricCipher::Encrypt);
-    cipherStream.init(finalKey, encryptionIV);
+    SymmetricCipherStream cipherStream(device);
+    cipherStream.init(mode, SymmetricCipher::Encrypt, finalKey, encryptionIV);
     if (!cipherStream.open(QIODevice::WriteOnly)) {
         raiseError(cipherStream.errorString());
         return false;
@@ -127,13 +131,13 @@ bool Kdbx3Writer::writeDatabase(QIODevice* device, Database* db)
 
     Q_ASSERT(outputDevice);
 
-    KeePass2RandomStream randomStream(KeePass2::ProtectedStreamAlgo::Salsa20);
-    if (!randomStream.init(protectedStreamKey)) {
+    KeePass2RandomStream randomStream;
+    if (!randomStream.init(SymmetricCipher::Salsa20, protectedStreamKey)) {
         raiseError(randomStream.errorString());
         return false;
     }
 
-    KdbxXmlWriter xmlWriter(formatVersion());
+    KdbxXmlWriter xmlWriter(db->formatVersion());
     xmlWriter.writeDatabase(outputDevice, db, &randomStream, headerHash);
 
     // Explicitly close/reset streams so they are flushed and we can detect
@@ -156,9 +160,4 @@ bool Kdbx3Writer::writeDatabase(QIODevice* device, Database* db)
     }
 
     return true;
-}
-
-quint32 Kdbx3Writer::formatVersion()
-{
-    return KeePass2::FILE_VERSION_3_1;
 }

@@ -17,8 +17,6 @@
 
 #include "HashedBlockStream.h"
 
-#include <cstring>
-
 #include "core/Endian.h"
 #include "crypto/CryptoHash.h"
 
@@ -128,7 +126,7 @@ bool HashedBlockStream::readHashedBlock()
 {
     bool ok;
 
-    quint32 index = Endian::readSizedInt<quint32>(m_baseDevice, ByteOrder, &ok);
+    auto index = Endian::readSizedInt<quint32>(m_baseDevice, ByteOrder, &ok);
     if (!ok || index != m_blockIndex) {
         m_error = true;
         setErrorString("Invalid block index.");

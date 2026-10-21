@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2018 Sami Vänttinen <sami.vanttinen@protonmail.com>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -21,16 +21,13 @@
 
 #include "DatabaseSettingsWidget.h"
 
-#include "browser/BrowserService.h"
-#include "core/CustomData.h"
-#include "gui/DatabaseTabWidget.h"
-
 #include <QItemSelection>
 #include <QPointer>
-#include <QScopedPointer>
 #include <QStandardItemModel>
 
+class CustomData;
 class Database;
+
 namespace Ui
 {
     class DatabaseSettingsWidgetBrowser;
@@ -46,15 +43,11 @@ public:
     ~DatabaseSettingsWidgetBrowser() override;
 
     CustomData* customData() const;
-    inline bool hasAdvancedMode() const override
-    {
-        return false;
-    }
 
 public slots:
     void initialize() override;
     void uninitialize() override;
-    bool save() override;
+    bool saveSettings() override;
 
 private slots:
     void removeSelectedKey();
@@ -62,11 +55,14 @@ private slots:
     void updateSharedKeyList();
     void removeSharedEncryptionKeys();
     void removeStoredPermissions();
-    void convertAttributesToCustomData();
+    void refreshDatabaseID();
+    void editIndex(const QModelIndex& index);
+    void editFinished(QStandardItem* item);
 
 private:
     void updateModel();
     void settingsWarning();
+    void replaceKey(const QString& prefix, const QString& oldName, const QString& newName) const;
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -76,7 +72,7 @@ protected:
 private:
     QPointer<CustomData> m_customData;
     QPointer<QStandardItemModel> m_customDataModel;
-    BrowserService m_browserService;
+    QString m_valueInEdit;
 };
 
 #endif // KEEPASSXC_DATABASESETTINGSWIDGETBROWSER_H

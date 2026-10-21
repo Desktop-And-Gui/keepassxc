@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2011 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -22,12 +22,9 @@
 #include "crypto/CryptoHash.h"
 #include "crypto/Random.h"
 
+#include <QDataStream>
 #include <QFile>
-
-#include <algorithm>
-#include <cstring>
-#include <gcrypt.h>
-#include <sodium.h>
+#include <QXmlStreamReader>
 
 QUuid FileKey::UUID("a584cbc4-c9b4-437e-81bb-362ca9709273");
 
@@ -35,16 +32,8 @@ constexpr int FileKey::SHA256_SIZE;
 
 FileKey::FileKey()
     : Key(UUID)
-    , m_key(static_cast<char*>(gcry_malloc_secure(SHA256_SIZE)))
+    , m_key(SHA256_SIZE)
 {
-}
-
-FileKey::~FileKey()
-{
-    if (m_key) {
-        gcry_free(m_key);
-        m_key = nullptr;
-    }
 }
 
 /**
@@ -64,9 +53,10 @@ FileKey::~FileKey()
  * removed in a future version.
  *
  * @param device input device
+ * @param errorMsg error message in case of fatal failure
  * @return true if key file was loaded successfully
  */
-bool FileKey::load(QIODevice* device)
+bool FileKey::load(QIODevice* device, QString* errorMsg)
 {
     m_type = None;
 
@@ -75,32 +65,33 @@ bool FileKey::load(QIODevice* device)
         return false;
     }
 
-    if (device->size() == 0) {
+    if (device->size() == 0 || !device->reset()) {
         return false;
     }
 
-    // try different legacy key file formats
-    if (!device->reset()) {
-        return false;
-    }
-    if (loadXml(device)) {
-        m_type = KeePass2XML;
+    // load XML key file v1 or v2
+    QString xmlError;
+    if (loadXml(device, &xmlError)) {
         return true;
     }
 
-    if (!device->reset()) {
+    if (!device->reset() || !xmlError.isEmpty()) {
+        if (errorMsg) {
+            *errorMsg = xmlError;
+        }
         return false;
     }
+
+    // try legacy key file formats
     if (loadBinary(device)) {
-        m_type = FixedBinary;
         return true;
     }
 
     if (!device->reset()) {
         return false;
     }
+
     if (loadHex(device)) {
-        m_type = FixedBinaryHex;
         return true;
     }
 
@@ -109,7 +100,6 @@ bool FileKey::load(QIODevice* device)
         return false;
     }
     if (loadHashed(device)) {
-        m_type = Hashed;
         return true;
     }
 
@@ -145,15 +135,22 @@ bool FileKey::load(const QString& fileName, QString* errorMsg)
         }
         return false;
     }
-    bool result = load(&file);
 
+    bool result = load(&file, errorMsg);
     file.close();
+
+    if (errorMsg && !errorMsg->isEmpty()) {
+        return false;
+    }
 
     if (file.error()) {
         result = false;
         if (errorMsg) {
             *errorMsg = file.errorString();
         }
+    } else {
+        // Store the file path for serialization
+        m_file = fileName;
     }
 
     return result;
@@ -164,21 +161,95 @@ bool FileKey::load(const QString& fileName, QString* errorMsg)
  */
 QByteArray FileKey::rawKey() const
 {
-    if (!m_key) {
-        return {};
+    return {m_key.data(), int(m_key.size())};
+}
+
+void FileKey::setRawKey(const QByteArray& data)
+{
+    Q_ASSERT(data.size() == SHA256_SIZE);
+    m_key.assign(data.begin(), data.end());
+}
+
+QByteArray FileKey::serialize() const
+{
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::WriteOnly);
+    stream << uuid().toRfc4122() << rawKey() << static_cast<qint32>(m_type) << m_file;
+    return data;
+}
+
+void FileKey::deserialize(const QByteArray& data)
+{
+    QDataStream stream(data);
+    QByteArray uuidData;
+    stream >> uuidData;
+    if (uuid().toRfc4122() == uuidData) {
+        QByteArray key;
+        qint32 type;
+        stream >> key >> type >> m_file;
+
+        setRawKey(key);
+        m_type = static_cast<Type>(type);
     }
-    return QByteArray::fromRawData(m_key, SHA256_SIZE);
 }
 
 /**
- * Generate a new key file from random bytes.
+ * Generate a new key file with random bytes.
  *
  * @param device output device
  * @param number of random bytes to generate
  */
-void FileKey::create(QIODevice* device, int size)
+void FileKey::createRandom(QIODevice* device, int size)
 {
     device->write(randomGen()->randomArray(size));
+}
+
+/**
+ * Generate a new key file in the KeePass2 XML format v2.
+ *
+ * @param device output device
+ * @param number of random bytes to generate
+ */
+void FileKey::createXMLv2(QIODevice* device, int size)
+{
+    QXmlStreamWriter w(device);
+    w.setAutoFormatting(true);
+    w.setAutoFormattingIndent(4);
+    w.writeStartDocument();
+
+    w.writeStartElement("KeyFile");
+
+    w.writeStartElement("Meta");
+    w.writeTextElement("Version", "2.0");
+    w.writeEndElement();
+
+    w.writeStartElement("Key");
+    w.writeStartElement("Data");
+
+    QByteArray key = randomGen()->randomArray(size);
+    CryptoHash hash(CryptoHash::Sha256);
+    hash.addData(key);
+    QByteArray result = hash.result().left(4);
+    key = key.toHex().toUpper();
+
+    w.writeAttribute("Hash", result.toHex().toUpper());
+    w.writeCharacters("\n            ");
+    for (int i = 0; i < key.size(); ++i) {
+        // Pretty-print hex value (not strictly necessary, but nicer to read and KeePass2 does it)
+        if (i != 0 && i % 32 == 0) {
+            w.writeCharacters("\n            ");
+        } else if (i != 0 && i % 8 == 0) {
+            w.writeCharacters(" ");
+        }
+        w.writeCharacters(QChar(key[i]));
+    }
+    Botan::secure_scrub_memory(key.data(), static_cast<std::size_t>(key.capacity()));
+    w.writeCharacters("\n        ");
+
+    w.writeEndElement();
+    w.writeEndElement();
+
+    w.writeEndDocument();
 }
 
 /**
@@ -189,7 +260,7 @@ void FileKey::create(QIODevice* device, int size)
  * @param number of random bytes to generate
  * @return true on successful creation
  */
-bool FileKey::create(const QString& fileName, QString* errorMsg, int size)
+bool FileKey::create(const QString& fileName, QString* errorMsg)
 {
     QFile file(fileName);
     if (!file.open(QFile::WriteOnly)) {
@@ -198,8 +269,13 @@ bool FileKey::create(const QString& fileName, QString* errorMsg, int size)
         }
         return false;
     }
-    create(&file, size);
+    if (fileName.endsWith(".keyx")) {
+        createXMLv2(&file);
+    } else {
+        createRandom(&file);
+    }
     file.close();
+    file.setPermissions(QFile::ReadUser);
 
     if (file.error()) {
         if (errorMsg) {
@@ -217,85 +293,82 @@ bool FileKey::create(const QString& fileName, QString* errorMsg, int size)
  *
  * @param device input device
  * @return true on success
- * @deprecated
  */
-bool FileKey::loadXml(QIODevice* device)
+bool FileKey::loadXml(QIODevice* device, QString* errorMsg)
 {
     QXmlStreamReader xmlReader(device);
 
-    if (!xmlReader.error() && xmlReader.readNextStartElement()) {
-        if (xmlReader.name() != "KeyFile") {
-            return false;
-        }
-    } else {
+    if (xmlReader.error()) {
+        return false;
+    }
+    if (xmlReader.readNextStartElement() && xmlReader.name().toString() != "KeyFile") {
         return false;
     }
 
-    bool correctMeta = false;
-    QByteArray data;
+    struct
+    {
+        QString version;
+        QByteArray hash;
+        QByteArray data;
+    } keyFileData;
 
     while (!xmlReader.error() && xmlReader.readNextStartElement()) {
-        if (xmlReader.name() == "Meta") {
-            correctMeta = loadXmlMeta(xmlReader);
-        } else if (xmlReader.name() == "Key") {
-            data = loadXmlKey(xmlReader);
+        if (xmlReader.name().toString() == "Meta") {
+            while (!xmlReader.error() && xmlReader.readNextStartElement()) {
+                if (xmlReader.name().toString() == "Version") {
+                    keyFileData.version = xmlReader.readElementText();
+                    if (keyFileData.version.startsWith("1.0")) {
+                        m_type = KeePass2XML;
+                    } else if (keyFileData.version == "2.0") {
+                        m_type = KeePass2XMLv2;
+                    } else {
+                        if (errorMsg) {
+                            *errorMsg = QObject::tr("Unsupported key file version: %1").arg(keyFileData.version);
+                        }
+                        return false;
+                    }
+                }
+            }
+        } else if (xmlReader.name().toString() == "Key") {
+            while (!xmlReader.error() && xmlReader.readNextStartElement()) {
+                if (xmlReader.name().toString() == "Data") {
+                    keyFileData.hash = QByteArray::fromHex(xmlReader.attributes().value("Hash").toLatin1());
+                    keyFileData.data = xmlReader.readElementText().simplified().replace(" ", "").toLatin1();
+
+                    if (keyFileData.version.startsWith("1.0") && Tools::isBase64(keyFileData.data)) {
+                        keyFileData.data = QByteArray::fromBase64(keyFileData.data);
+                    } else if (keyFileData.version == "2.0" && Tools::isHex(keyFileData.data)) {
+                        keyFileData.data = QByteArray::fromHex(keyFileData.data);
+
+                        CryptoHash hash(CryptoHash::Sha256);
+                        hash.addData(keyFileData.data);
+                        QByteArray result = hash.result().left(4);
+                        if (keyFileData.hash != result) {
+                            if (errorMsg) {
+                                *errorMsg = QObject::tr("Checksum mismatch! Key file may be corrupt.");
+                            }
+                            return false;
+                        }
+                    } else {
+                        if (errorMsg) {
+                            *errorMsg = QObject::tr("Unexpected key file data! Key file may be corrupt.");
+                        }
+                        return false;
+                    }
+                }
+            }
         }
     }
 
     bool ok = false;
-    if (!xmlReader.error() && correctMeta && !data.isEmpty()) {
-        std::memcpy(m_key, data.data(), std::min(SHA256_SIZE, data.size()));
+    if (!xmlReader.error() && !keyFileData.data.isEmpty()) {
+        std::memcpy(m_key.data(), keyFileData.data.data(), qMin(SHA256_SIZE, keyFileData.data.size()));
         ok = true;
     }
 
-    sodium_memzero(data.data(), static_cast<std::size_t>(data.capacity()));
+    Botan::secure_scrub_memory(keyFileData.data.data(), static_cast<std::size_t>(keyFileData.data.capacity()));
 
     return ok;
-}
-
-/**
- * Load meta data from legacy KeePass 2 XML key file.
- *
- * @param xmlReader input XML reader
- * @return true on success
- * @deprecated
- */
-bool FileKey::loadXmlMeta(QXmlStreamReader& xmlReader)
-{
-    bool correctVersion = false;
-
-    while (!xmlReader.error() && xmlReader.readNextStartElement()) {
-        if (xmlReader.name() == "Version") {
-            if (xmlReader.readElementText() == "1.00") {
-                correctVersion = true;
-            }
-        }
-    }
-
-    return correctVersion;
-}
-
-/**
- * Load base64 key data from legacy KeePass 2 XML key file.
- *
- * @param xmlReader input XML reader
- * @return true on success
- * @deprecated
- */
-QByteArray FileKey::loadXmlKey(QXmlStreamReader& xmlReader)
-{
-    QByteArray data;
-
-    while (!xmlReader.error() && xmlReader.readNextStartElement()) {
-        if (xmlReader.name() == "Data") {
-            QByteArray rawData = xmlReader.readElementText().toLatin1();
-            if (Tools::isBase64(rawData)) {
-                data = QByteArray::fromBase64(rawData);
-            }
-        }
-    }
-
-    return data;
 }
 
 /**
@@ -311,14 +384,14 @@ bool FileKey::loadBinary(QIODevice* device)
         return false;
     }
 
-    QByteArray data;
-    if (!Tools::readAllFromDevice(device, data) || data.size() != 32) {
+    Botan::secure_vector<char> data(32);
+    if (device->read(data.data(), 32) != 32 || !device->atEnd()) {
         return false;
-    } else {
-        std::memcpy(m_key, data.data(), std::min(SHA256_SIZE, data.size()));
-        sodium_memzero(data.data(), static_cast<std::size_t>(data.capacity()));
-        return true;
     }
+
+    m_key = data;
+    m_type = FixedBinary;
+    return true;
 }
 
 /**
@@ -343,16 +416,15 @@ bool FileKey::loadHex(QIODevice* device)
         return false;
     }
 
-    QByteArray key = QByteArray::fromHex(data);
-    sodium_memzero(data.data(), static_cast<std::size_t>(data.capacity()));
-
-    if (key.size() != 32) {
+    data = QByteArray::fromHex(data);
+    if (data.size() != 32) {
         return false;
     }
 
-    std::memcpy(m_key, key.data(), std::min(SHA256_SIZE, key.size()));
-    sodium_memzero(key.data(), static_cast<std::size_t>(key.capacity()));
+    std::memcpy(m_key.data(), data.data(), qMin(SHA256_SIZE, data.size()));
+    Botan::secure_scrub_memory(data.data(), static_cast<std::size_t>(data.capacity()));
 
+    m_type = FixedBinaryHex;
     return true;
 }
 
@@ -374,10 +446,11 @@ bool FileKey::loadHashed(QIODevice* device)
         cryptoHash.addData(buffer);
     } while (!buffer.isEmpty());
 
-    auto result = cryptoHash.result();
-    std::memcpy(m_key, result.data(), std::min(SHA256_SIZE, result.size()));
-    sodium_memzero(result.data(), static_cast<std::size_t>(result.capacity()));
+    buffer = cryptoHash.result();
+    std::memcpy(m_key.data(), buffer.data(), qMin(SHA256_SIZE, buffer.size()));
+    Botan::secure_scrub_memory(buffer.data(), static_cast<std::size_t>(buffer.capacity()));
 
+    m_type = Hashed;
     return true;
 }
 

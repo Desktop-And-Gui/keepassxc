@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2019 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,85 +17,82 @@
  */
 
 #include "TestGuiBrowser.h"
-#include "TestGlobal.h"
 #include "gui/Application.h"
 
-#include <QAction>
-#include <QApplication>
-#include <QDebug>
-#include <QDialogButtonBox>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QLineEdit>
 #include <QListView>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTableView>
+#include <QTest>
 #include <QToolBar>
 
+#include "browser/BrowserService.h"
 #include "config-keepassx-tests.h"
-#include "core/Bootstrap.h"
-#include "core/Config.h"
-#include "core/Database.h"
-#include "core/Entry.h"
-#include "core/Tools.h"
 #include "crypto/Crypto.h"
 #include "gui/DatabaseTabWidget.h"
-#include "gui/DatabaseWidget.h"
 #include "gui/FileDialog.h"
 #include "gui/MessageBox.h"
-#include "gui/PasswordEdit.h"
-#include "gui/dbsettings/DatabaseSettingsDialog.h"
+#include "gui/PasswordWidget.h"
 #include "gui/entry/EditEntryWidget.h"
 #include "gui/entry/EntryView.h"
 
-QTEST_MAIN(TestGuiBrowser)
+int main(int argc, char* argv[])
+{
+    QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+    QGuiApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
+    Application app(argc, argv);
+    app.setApplicationName("KeePassXC");
+    app.setApplicationVersion(KEEPASSXC_VERSION);
+    app.setQuitOnLastWindowClosed(false);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    app.applyTheme();
+    TestGuiBrowser tc;
+    QTEST_SET_MAIN_SOURCE_PATH
+    return QTest::qExec(&tc, argc, argv);
+}
 
 void TestGuiBrowser::initTestCase()
 {
     QVERIFY(Crypto::init());
-    Config::createTempFileInstance();
+    // Create temporary config file
+    Config::createConfigFromFile(TemporaryFile::createTempConfigFile(), {});
     // Disable autosave so we can test the modified file indicator
-    config()->set("AutoSaveAfterEveryChange", false);
-    config()->set("AutoSaveOnExit", false);
+    config()->set(Config::AutoSaveAfterEveryChange, false);
+    config()->set(Config::AutoSaveOnExit, false);
     // Enable the tray icon so we can test hiding/restoring the windowQByteArray
-    config()->set("GUI/ShowTrayIcon", true);
-    // Disable advanced settings mode (activate within individual tests to test advanced settings)
-    config()->set("GUI/AdvancedSettings", false);
+    config()->set(Config::GUI_ShowTrayIcon, true);
     // Disable the update check first time alert
-    config()->set("UpdateCheckMessageShown", true);
+    config()->set(Config::UpdateCheckMessageShown, true);
+    // Disable quick unlock
+    config()->set(Config::Security_QuickUnlock, false);
 
     m_mainWindow.reset(new MainWindow());
-    Bootstrap::restoreMainWindowState(*m_mainWindow);
     m_tabWidget = m_mainWindow->findChild<DatabaseTabWidget*>("tabWidget");
     m_mainWindow->show();
 
-    // Load the NewDatabase.kdbx file into temporary storage
-    QFile sourceDbFile(QString(KEEPASSX_TEST_DATA_DIR).append("/NewDatabaseBrowser.kdbx"));
-    QVERIFY(sourceDbFile.open(QIODevice::ReadOnly));
-    QVERIFY(Tools::readAllFromDevice(&sourceDbFile, m_dbData));
-    sourceDbFile.close();
+    QLocale::setDefault(QLocale::c());
 }
 
 // Every test starts with opening the temp database
 void TestGuiBrowser::init()
 {
     m_dbFile.reset(new TemporaryFile());
-    // Write the temp storage to a temp database file for use in our tests
-    QVERIFY(m_dbFile->open());
-    QCOMPARE(m_dbFile->write(m_dbData), static_cast<qint64>((m_dbData.size())));
-    m_dbFileName = QFileInfo(m_dbFile->fileName()).fileName();
-    m_dbFilePath = m_dbFile->fileName();
-    m_dbFile->close();
+    m_dbFile->copyFromFile(QString(KEEPASSX_TEST_DATA_DIR).append("/NewDatabaseBrowser.kdbx"));
 
     // make sure window is activated or focus tests may fail
     m_mainWindow->activateWindow();
     QApplication::processEvents();
 
-    fileDialog()->setNextFileName(m_dbFilePath);
+    fileDialog()->setNextFileName(m_dbFile->fileName());
     triggerAction("actionDatabaseOpen");
 
     auto* databaseOpenWidget = m_tabWidget->currentDatabaseWidget()->findChild<QWidget*>("databaseOpenWidget");
     QVERIFY(databaseOpenWidget);
-    auto* editPassword = databaseOpenWidget->findChild<QLineEdit*>("editPassword");
+    auto* editPassword =
+        databaseOpenWidget->findChild<PasswordWidget*>("editPassword")->findChild<QLineEdit*>("passwordEdit");
     QVERIFY(editPassword);
     editPassword->setFocus();
 
@@ -131,7 +128,7 @@ void TestGuiBrowser::cleanupTestCase()
 void TestGuiBrowser::testEntrySettings()
 {
     // Enable the Browser Integration
-    config()->set("Browser/Enabled", true);
+    config()->set(Config::Browser_Enabled, true);
 
     auto* toolBar = m_mainWindow->findChild<QToolBar*>("toolBar");
     auto* entryView = m_dbWidget->findChild<EntryView*>("entryView");
@@ -147,7 +144,7 @@ void TestGuiBrowser::testEntrySettings()
     auto* entryEditAction = m_mainWindow->findChild<QAction*>("actionEntryEdit");
     QWidget* entryEditWidget = toolBar->widgetForAction(entryEditAction);
     QTest::mouseClick(entryEditWidget, Qt::LeftButton);
-    QCOMPARE(m_dbWidget->currentMode(), DatabaseWidget::Mode::EditMode);
+    QCOMPARE(m_dbWidget->currentMode(), DatabaseWidget::Mode::EditEntryMode);
     auto* editEntryWidget = m_dbWidget->findChild<EditEntryWidget*>("editEntryWidget");
 
     // Switch to Properties page and select all rows from the custom data table
@@ -191,7 +188,7 @@ void TestGuiBrowser::testAdditionalURLs()
     auto* entryEditAction = m_mainWindow->findChild<QAction*>("actionEntryEdit");
     QWidget* entryEditWidget = toolBar->widgetForAction(entryEditAction);
     QTest::mouseClick(entryEditWidget, Qt::LeftButton);
-    QCOMPARE(m_dbWidget->currentMode(), DatabaseWidget::Mode::EditMode);
+    QCOMPARE(m_dbWidget->currentMode(), DatabaseWidget::Mode::EditEntryMode);
     auto* editEntryWidget = m_dbWidget->findChild<EditEntryWidget*>("editEntryWidget");
 
     // Switch to Browser Integration page and add three URL's
@@ -208,7 +205,6 @@ void TestGuiBrowser::testAdditionalURLs()
         QTest::mouseClick(addURLButton, Qt::LeftButton);
         QApplication::processEvents();
         QTest::keyClicks(urlList->focusWidget(), url);
-        QTest::keyClick(urlList->focusWidget(), Qt::Key_Enter);
     }
 
     // Check the values from attributesEdit
@@ -224,6 +220,28 @@ void TestGuiBrowser::testAdditionalURLs()
         QCOMPARE(attrTextEdit->toPlainText(), url);
         QTest::keyClick(attributesView->focusWidget(), Qt::Key_Down);
     }
+}
+
+void TestGuiBrowser::testGetDatabaseGroups()
+{
+    auto result = browserService()->getDatabaseGroups();
+    QCOMPARE(result.length(), 1);
+
+    auto groups = result["groups"].toArray();
+    auto first = groups.at(0);
+    auto children = first.toObject()["children"].toArray();
+    QCOMPARE(first.toObject()["name"].toString(), QString("NewDatabase"));
+    QCOMPARE(children.size(), 6);
+
+    auto firstChild = children.at(0).toObject();
+    auto secondChild = children.at(1).toObject();
+    QCOMPARE(firstChild["name"].toString(), QString("General"));
+    QCOMPARE(secondChild["name"].toString(), QString("Windows"));
+
+    auto subGroups = firstChild["children"].toArray();
+    QCOMPARE(subGroups.count(), 1);
+    auto subGroupObj = subGroups.at(0).toObject();
+    QCOMPARE(subGroupObj["name"].toString(), QString("SubGroup"));
 }
 
 void TestGuiBrowser::triggerAction(const QString& name)

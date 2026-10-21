@@ -19,9 +19,11 @@
 
 #include "core/Config.h"
 
-#include <QDir>
+#include <QProcessEnvironment>
 
 FileDialog* FileDialog::m_instance(nullptr);
+
+FileDialog::FileDialog() = default;
 
 QString FileDialog::getOpenFileName(QWidget* parent,
                                     const QString& caption,
@@ -35,7 +37,7 @@ QString FileDialog::getOpenFileName(QWidget* parent,
         m_nextFileName.clear();
         return result;
     } else {
-        const auto& workingDir = dir.isEmpty() ? config()->get("LastDir").toString() : dir;
+        const auto& workingDir = dir.isEmpty() ? getLastDir("default") : dir;
         const auto result = QDir::toNativeSeparators(
             QFileDialog::getOpenFileName(parent, caption, workingDir, filter, selectedFilter, options));
 
@@ -45,7 +47,6 @@ QString FileDialog::getOpenFileName(QWidget* parent,
             parent->activateWindow();
         }
 #endif
-        saveLastDir(result);
         return result;
     }
 }
@@ -62,11 +63,12 @@ QStringList FileDialog::getOpenFileNames(QWidget* parent,
         m_nextFileNames.clear();
         return results;
     } else {
-        const auto& workingDir = dir.isEmpty() ? config()->get("LastDir").toString() : dir;
+        const auto& workingDir = dir.isEmpty() ? getLastDir("default") : dir;
         auto results = QFileDialog::getOpenFileNames(parent, caption, workingDir, filter, selectedFilter, options);
 
-        for (auto& path : results)
+        for (auto& path : results) {
             path = QDir::toNativeSeparators(path);
+        }
 
 #ifdef Q_OS_MACOS
         // on Mac OS X the focus is lost after closing the native dialog
@@ -74,37 +76,7 @@ QStringList FileDialog::getOpenFileNames(QWidget* parent,
             parent->activateWindow();
         }
 #endif
-        if (!results.isEmpty()) {
-            saveLastDir(results[0]);
-        }
         return results;
-    }
-}
-
-QString FileDialog::getFileName(QWidget* parent,
-                                const QString& caption,
-                                const QString& dir,
-                                const QString& filter,
-                                QString* selectedFilter,
-                                const QFileDialog::Options options)
-{
-    if (!m_nextFileName.isEmpty()) {
-        const QString result = m_nextFileName;
-        m_nextFileName.clear();
-        return result;
-    } else {
-        const auto& workingDir = dir.isEmpty() ? config()->get("LastDir").toString() : dir;
-        const auto result = QDir::toNativeSeparators(
-            QFileDialog::getSaveFileName(parent, caption, workingDir, filter, selectedFilter, options));
-
-#ifdef Q_OS_MACOS
-        // on Mac OS X the focus is lost after closing the native dialog
-        if (parent) {
-            parent->activateWindow();
-        }
-#endif
-        saveLastDir(result);
-        return result;
     }
 }
 
@@ -120,7 +92,7 @@ QString FileDialog::getSaveFileName(QWidget* parent,
         m_nextFileName.clear();
         return result;
     } else {
-        const auto& workingDir = dir.isEmpty() ? config()->get("LastDir").toString() : dir;
+        const auto& workingDir = dir.isEmpty() ? getLastDir("default") : dir;
         const auto result = QDir::toNativeSeparators(
             QFileDialog::getSaveFileName(parent, caption, workingDir, filter, selectedFilter, options));
 
@@ -130,7 +102,6 @@ QString FileDialog::getSaveFileName(QWidget* parent,
             parent->activateWindow();
         }
 #endif
-        saveLastDir(result);
         return result;
     }
 }
@@ -145,7 +116,7 @@ QString FileDialog::getExistingDirectory(QWidget* parent,
         m_nextDirName.clear();
         return result;
     } else {
-        const auto& workingDir = dir.isEmpty() ? config()->get("LastDir").toString() : dir;
+        const auto& workingDir = dir.isEmpty() ? getLastDir("default") : dir;
         const auto result =
             QDir::toNativeSeparators(QFileDialog::getExistingDirectory(parent, caption, workingDir, options));
 
@@ -155,7 +126,6 @@ QString FileDialog::getExistingDirectory(QWidget* parent,
             parent->activateWindow();
         }
 #endif
-        saveLastDir(result);
         return result;
     }
 }
@@ -165,32 +135,40 @@ void FileDialog::setNextFileName(const QString& fileName)
     m_nextFileName = fileName;
 }
 
-void FileDialog::setNextFileNames(const QStringList& fileNames)
+void FileDialog::setNextDirectory(const QString& path)
 {
-    m_nextFileNames = fileNames;
+    m_nextDirName = path;
 }
 
-void FileDialog::setNextDirName(const QString& dirName)
+void FileDialog::saveLastDir(const QString& role, const QString& path, bool sensitive)
 {
-    m_nextDirName = dirName;
+    auto lastDirs = config()->get(Config::LastDir).toHash();
+    if (sensitive && !config()->get(Config::RememberLastDatabases).toBool()) {
+        // Ensure this role is forgotten
+        lastDirs.remove(role);
+    } else {
+        auto pathInfo = QFileInfo(path);
+        if (!pathInfo.exists()) {
+            lastDirs.remove(role);
+        } else {
+            lastDirs.insert(role, pathInfo.absolutePath());
+        }
+    }
+    config()->set(Config::LastDir, lastDirs);
 }
 
-void FileDialog::setNextForgetDialog()
+QString FileDialog::getLastDir(const QString& role, const QString& defaultDir)
 {
-    m_forgetLastDir = true;
-}
+    auto lastDirs = config()->get(Config::LastDir).toHash();
+    auto fallbackDir = defaultDir;
 
-FileDialog::FileDialog()
-{
-}
-
-void FileDialog::saveLastDir(const QString& dir)
-{
-    if (!dir.isEmpty() && !m_forgetLastDir) {
-        config()->set("LastDir", QFileInfo(dir).absolutePath());
+    if (fallbackDir.isEmpty()) {
+        // Fallback to the environment variable, if it exists, otherwise use the home directory
+        const auto& env = QProcessEnvironment::systemEnvironment();
+        fallbackDir = env.value("KPXC_INITIAL_DIR", QDir::homePath());
     }
 
-    m_forgetLastDir = false;
+    return lastDirs.value(role, fallbackDir).toString();
 }
 
 FileDialog* FileDialog::instance()

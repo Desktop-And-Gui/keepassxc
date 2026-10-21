@@ -1,5 +1,4 @@
-#  Copyright (C) 2017 Sami Vänttinen <sami.vanttinen@protonmail.com>
-#  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+#  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -14,49 +13,35 @@
 #  You should have received a copy of the GNU General Public License
 #  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-if(WITH_XC_BROWSER)
-    include_directories(${BROWSER_SOURCE_DIR})
-
+if(KPXC_FEATURE_BROWSER)
     set(proxy_SOURCES
-        ../core/Alloc.cpp
+        ../browser/BrowserShared.cpp
         keepassxc-proxy.cpp
-        ${BROWSER_SOURCE_DIR}/NativeMessagingBase.cpp
-        NativeMessagingHost.cpp)
+        NativeMessagingProxy.cpp)
 
-    add_library(proxy STATIC ${proxy_SOURCES})
-    target_link_libraries(proxy Qt5::Core Qt5::Network ${sodium_LIBRARY_RELEASE})
-    add_executable(keepassxc-proxy keepassxc-proxy.cpp)
-    target_link_libraries(keepassxc-proxy proxy)
+    # Alloc must be defined in a static library to prevent clashing with clang ASAN definitions
+    add_library(proxy_alloc STATIC ../core/Alloc.cpp)
+    target_link_libraries(proxy_alloc PRIVATE Qt6::Core ${BOTAN_LIBRARIES})
 
+    add_executable(keepassxc-proxy ${proxy_SOURCES})
+    target_link_libraries(keepassxc-proxy proxy_alloc Qt6::Core Qt6::Network)
     install(TARGETS keepassxc-proxy
             BUNDLE DESTINATION . COMPONENT Runtime
             RUNTIME DESTINATION ${PROXY_INSTALL_DIR} COMPONENT Runtime)
 
     if(APPLE AND WITH_APP_BUNDLE)
-        add_custom_command(TARGET keepassxc-proxy
-                           POST_BUILD
-                           COMMAND ${CMAKE_INSTALL_NAME_TOOL}
-                                -change ${Qt5_PREFIX}/lib/QtCore.framework/Versions/5/QtCore
-                                    "@executable_path/../Frameworks/QtCore.framework/Versions/5/QtCore"
-                                -change /usr/local/opt/qt/lib/QtCore.framework/Versions/5/QtCore
-                                    "@executable_path/../Frameworks/QtCore.framework/Versions/5/QtCore"
-                                -change ${Qt5_PREFIX}/lib/QtNetwork.framework/Versions/5/QtNetwork
-                                    "@executable_path/../Frameworks/QtNetwork.framework/Versions/5/QtNetwork"
-                                -change /usr/local/opt/qt/lib/QtNetwork.framework/Versions/5/QtNetwork
-                                    "@executable_path/../Frameworks/QtNetwork.framework/Versions/5/QtNetwork"
-                                -change /usr/local/opt/libsodium/lib/libsodium.23.dylib
-                                    "@executable_path/../Frameworks/libsodium.23.dylib"
-                           keepassxc-proxy
-                           COMMENT "Changing linking of keepassxc-proxy")
-
-        # Copy app to staging directory for pre-install testing
         set(PROXY_APP_DIR "${CMAKE_BINARY_DIR}/src/${PROXY_INSTALL_DIR}")
         add_custom_command(TARGET keepassxc-proxy
-                           POST_BUILD
-                           COMMAND ${CMAKE_COMMAND} -E copy keepassxc-proxy ${PROXY_APP_DIR}/keepassxc-proxy
-                           COMMENT "Copying keepassxc-proxy inside the application")
+                POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/keepassxc-proxy ${PROXY_APP_DIR}/keepassxc-proxy
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/src
+                COMMENT "Copying keepassxc-proxy into app bundle")
+
+        set_property(GLOBAL APPEND PROPERTY
+            _MACDEPLOYQT_EXTRA_BINARIES "${PROXY_INSTALL_DIR}/keepassxc-proxy")
     endif()
-    if(MINGW)
+
+    if(WIN32)
       target_link_libraries(keepassxc-proxy Wtsapi32.lib Ws2_32.lib)
     endif()
 endif()

@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2013 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -18,11 +19,7 @@
 #ifndef KEEPASSX_TESTRANDOMGENERATOR_H
 #define KEEPASSX_TESTRANDOMGENERATOR_H
 
-#include "crypto/Random.h"
-
 #include <QObject>
-
-class RandomBackendPreset;
 
 class TestRandomGenerator : public QObject
 {
@@ -30,12 +27,9 @@ class TestRandomGenerator : public QObject
 
 private slots:
     void initTestCase();
-    void cleanupTestCase();
+    void testArray();
     void testUInt();
     void testUIntRange();
-
-private:
-    RandomBackendPreset* m_backend;
 };
 
 #endif // KEEPASSX_TESTRANDOMGENERATOR_H

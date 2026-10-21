@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2019 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -15,31 +15,44 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "OpData01.h"
 #include "OpVaultReader.h"
 
-#include "core/Group.h"
-#include "core/Tools.h"
-#include "crypto/CryptoHash.h"
-#include "crypto/SymmetricCipher.h"
-#include "totp/totp.h"
+#include "core/Entry.h"
+#include "core/Totp.h"
 
 #include <QDebug>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocale>
 #include <QUrlQuery>
-#include <QUuid>
+
+namespace
+{
+    QDateTime resolveDate(const QString& kind, const QJsonValue& value)
+    {
+        QDateTime date;
+        if (kind == "monthYear") {
+            // 1Password programmers are sadistic...
+            auto dateValue = QString::number(value.toInt());
+            date = QDateTime::fromString(dateValue, "yyyyMM");
+            date.setTimeSpec(Qt::UTC);
+        } else if (value.isString()) {
+            date = QDateTime::fromSecsSinceEpoch(value.toString().toUInt(), Qt::UTC);
+        } else {
+            date = QDateTime::fromSecsSinceEpoch(value.toInt(), Qt::UTC);
+        }
+        return date;
+    }
+} // namespace
 
 void OpVaultReader::fillFromSection(Entry* entry, const QJsonObject& section)
 {
     const auto uuid = entry->uuid();
-    const QString& sectionName = section["name"].toString();
+    auto sectionTitle = section["title"].toString();
 
     if (!section.contains("fields")) {
-        auto sectionNameLC = sectionName.toLower();
-        auto sectionTitleLC = section["title"].toString("").toLower();
-        if (!(sectionNameLC == "linked items" && sectionTitleLC == "related items")) {
+        auto sectionName = section["name"].toString();
+        if (!(sectionName.toLower() == "linked items" && sectionTitle.toLower() == "related items")) {
             qWarning() << R"(Skipping "fields"-less Section in UUID ")" << uuid << "\": <<" << section << ">>";
         }
         return;
@@ -47,18 +60,18 @@ void OpVaultReader::fillFromSection(Entry* entry, const QJsonObject& section)
         qWarning() << R"(Skipping non-Array "fields" in UUID ")" << uuid << "\"\n";
         return;
     }
+
     QJsonArray sectionFields = section["fields"].toArray();
     for (const QJsonValue sectionField : sectionFields) {
         if (!sectionField.isObject()) {
             qWarning() << R"(Skipping non-Object "fields" in UUID ")" << uuid << "\": << " << sectionField << ">>";
             continue;
         }
-        QJsonObject field = sectionField.toObject();
-        fillFromSectionField(entry, sectionName, field);
+        fillFromSectionField(entry, sectionTitle, sectionField.toObject());
     }
 }
 
-void OpVaultReader::fillFromSectionField(Entry* entry, const QString& sectionName, QJsonObject& field)
+void OpVaultReader::fillFromSectionField(Entry* entry, const QString& sectionName, const QJsonObject& field)
 {
     if (!field.contains("v")) {
         // for our purposes, we don't care if there isn't a value in the field
@@ -68,11 +81,20 @@ void OpVaultReader::fillFromSectionField(Entry* entry, const QString& sectionNam
     // Ignore "a" and "inputTraits" fields, they don't apply to KPXC
 
     auto attrName = resolveAttributeName(sectionName, field["n"].toString(), field["t"].toString());
-    auto attrValue = field.value("v").toVariant().toString();
+    auto attrValue = field.value("v").toString();
     auto kind = field["k"].toString();
 
     if (attrName.startsWith("TOTP_")) {
-        if (attrValue.startsWith("otpauth://")) {
+        if (entry->hasTotp()) {
+            // Store multiple TOTP definitions as additional otp attributes
+            int i = 0;
+            QString name("otp");
+            auto attributes = entry->attributes()->keys();
+            while (attributes.contains(name)) {
+                name = QString("otp_%1").arg(++i);
+            }
+            entry->attributes()->set(name, attrValue, true);
+        } else if (attrValue.startsWith("otpauth://")) {
             QUrlQuery query(attrValue);
             // at least as of 1Password 7, they don't append the digits= and period= which totp.cpp requires
             if (!query.hasQueryItem("digits")) {
@@ -82,30 +104,41 @@ void OpVaultReader::fillFromSectionField(Entry* entry, const QString& sectionNam
                 query.addQueryItem("period", QString("%1").arg(Totp::DEFAULT_STEP));
             }
             attrValue = query.toString(QUrl::FullyEncoded);
-        }
-        entry->attributes()->set(Totp::ATTRIBUTE_SETTINGS, attrValue, true);
-    } else if (attrName.startsWith("expir", Qt::CaseInsensitive)) {
-        QDateTime expiry;
-        if (kind == "date") {
-            expiry = QDateTime::fromTime_t(attrValue.toUInt(), Qt::UTC);
+            entry->setTotp(Totp::parseSettings(attrValue));
         } else {
-            expiry = QDateTime::fromString(attrValue, "yyyyMM");
-            expiry.setTimeSpec(Qt::UTC);
+            entry->setTotp(Totp::parseSettings({}, attrValue));
         }
 
+    } else if (attrName.startsWith("expir", Qt::CaseInsensitive)) {
+        QDateTime expiry = resolveDate(kind, field.value("v"));
         if (expiry.isValid()) {
             entry->setExpiryTime(expiry);
             entry->setExpires(true);
+        } else {
+            qWarning() << QString("[%1] Invalid expiration date found: %2").arg(entry->title(), attrValue);
         }
     } else {
-        if (kind == "date") {
-            auto date = QDateTime::fromTime_t(attrValue.toUInt(), Qt::UTC);
+        if (kind == "date" || kind == "monthYear") {
+            QDateTime date = resolveDate(kind, field.value("v"));
             if (date.isValid()) {
-                attrValue = date.toString();
+                entry->attributes()->set(attrName, QLocale::system().toString(date, QLocale::ShortFormat));
+            } else {
+                qWarning()
+                    << QString("[%1] Invalid date attribute found: %2 = %3").arg(entry->title(), attrName, attrValue);
             }
+        } else if (kind == "address") {
+            // Expand address into multiple attributes
+            auto addrFields = field.value("v").toObject().toVariantMap();
+            for (auto& part : addrFields.keys()) {
+                entry->attributes()->set(attrName + QString("_%1").arg(part), addrFields.value(part).toString());
+            }
+        } else {
+            if (entry->attributes()->hasKey(attrName)) {
+                // Append a random string to the attribute name to avoid collisions
+                attrName += QString("_%1").arg(QUuid::createUuid().toString().mid(1, 5));
+            }
+            entry->attributes()->set(attrName, attrValue, (kind == "password" || kind == "concealed"));
         }
-
-        entry->attributes()->set(attrName, attrValue, (kind == "password" || kind == "concealed"));
     }
 }
 
@@ -118,7 +151,7 @@ QString OpVaultReader::resolveAttributeName(const QString& section, const QStrin
 
     auto lowName = name.toLower();
     auto lowText = text.toLower();
-    if (section.isEmpty()) {
+    if (section.isEmpty() || name.startsWith("address")) {
         // Empty section implies these are core attributes
         // try to find username, password, url
         if (lowName == "password" || lowText == "password") {
@@ -129,8 +162,8 @@ QString OpVaultReader::resolveAttributeName(const QString& section, const QStrin
                    || lowName == "website") {
             return EntryAttributes::URLKey;
         }
-        return name;
+        return text;
     }
 
-    return QString("%1_%2").arg(section, name);
+    return QString("%1_%2").arg(section, text);
 }

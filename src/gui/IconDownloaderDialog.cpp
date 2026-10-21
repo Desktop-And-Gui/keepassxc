@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2019 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2021 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,27 +18,26 @@
 #include "IconDownloaderDialog.h"
 #include "ui_IconDownloaderDialog.h"
 
-#include "core/AsyncTask.h"
 #include "core/Config.h"
+#include "core/Database.h"
 #include "core/Entry.h"
-#include "core/Global.h"
-#include "core/Group.h"
-#include "core/IconDownloader.h"
 #include "core/Metadata.h"
 #include "core/Tools.h"
+#include "gui/IconDownloader.h"
 #include "gui/IconModels.h"
+#include "gui/Icons.h"
+#include "osutils/OSUtils.h"
 #ifdef Q_OS_MACOS
-#include "gui/macutils/MacUtils.h"
+#include "gui/osutils/macutils/MacUtils.h"
 #endif
 
-#include <QMutexLocker>
+#include <QStandardItemModel>
 
 IconDownloaderDialog::IconDownloaderDialog(QWidget* parent)
     : QDialog(parent)
     , m_ui(new Ui::IconDownloaderDialog())
     , m_dataModel(new QStandardItemModel(this))
 {
-    setWindowFlags(Qt::Window);
     setAttribute(Qt::WA_DeleteOnClose);
 
     m_ui->setupUi(this);
@@ -80,13 +79,13 @@ void IconDownloaderDialog::downloadFavicons(const QSharedPointer<Database>& data
         Tools::wait(100);
 #endif
         showFallbackMessage(false);
-        m_ui->progressLabel->setText(tr("Please wait, processing entry list..."));
+        m_ui->progressLabel->setText(tr("Please wait, processing entry list…"));
         open();
         QApplication::processEvents();
 
         for (const auto& url : m_urlToEntries.uniqueKeys()) {
             m_dataModel->appendRow(QList<QStandardItem*>()
-                                   << new QStandardItem(url) << new QStandardItem(tr("Downloading...")));
+                                   << new QStandardItem(url) << new QStandardItem(tr("Downloading…")));
             m_activeDownloaders.append(createDownloader(url));
         }
 
@@ -99,6 +98,23 @@ void IconDownloaderDialog::downloadFavicons(const QSharedPointer<Database>& data
         for (auto downloader : m_activeDownloaders) {
             downloader->download();
         }
+    }
+}
+
+void IconDownloaderDialog::downloadFaviconInBackground(const QSharedPointer<Database>& database, Entry* entry)
+{
+    m_db = database;
+    m_urlToEntries.clear();
+    abortDownloads();
+
+    auto webUrl = entry->webUrl();
+    if (!webUrl.isEmpty()) {
+        m_urlToEntries.insert(webUrl, entry);
+    }
+
+    if (m_urlToEntries.count() > 0) {
+        m_activeDownloaders.append(createDownloader(webUrl));
+        m_activeDownloaders.first()->download();
     }
 }
 
@@ -131,15 +147,17 @@ void IconDownloaderDialog::downloadFinished(const QString& url, const QImage& ic
 
     if (m_db && !icon.isNull()) {
         // Don't add an icon larger than 128x128, but retain original size if smaller
-        auto scaledicon = icon;
-        if (icon.width() > 128 || icon.height() > 128) {
-            scaledicon = icon.scaled(128, 128);
+        constexpr auto maxIconSize = 128;
+        auto scaledIcon = icon;
+        if (icon.width() > maxIconSize || icon.height() > maxIconSize) {
+            scaledIcon = icon.scaled(maxIconSize, maxIconSize);
         }
 
-        QUuid uuid = m_db->metadata()->findCustomIcon(scaledicon);
+        QByteArray serializedIcon = Icons::saveToBytes(scaledIcon);
+        QUuid uuid = m_db->metadata()->findCustomIcon(serializedIcon);
         if (uuid.isNull()) {
             uuid = QUuid::createUuid();
-            m_db->metadata()->addCustomIcon(uuid, scaledicon);
+            m_db->metadata()->addCustomIcon(uuid, serializedIcon);
             updateTable(url, tr("Ok"));
         } else {
             updateTable(url, tr("Already Exists"));
@@ -159,7 +177,7 @@ void IconDownloaderDialog::downloadFinished(const QString& url, const QImage& ic
 void IconDownloaderDialog::showFallbackMessage(bool state)
 {
     // Show fallback message if the option is not active
-    bool show = state && !config()->get("security/IconDownloadFallback").toBool();
+    bool show = state && !config()->get(Config::Security_IconDownloadFallback).toBool();
     m_ui->fallbackLabel->setVisible(show);
 }
 
@@ -170,7 +188,7 @@ void IconDownloaderDialog::updateProgressBar()
     m_ui->progressBar->setValue(value);
     m_ui->progressBar->setMaximum(total);
     m_ui->progressLabel->setText(
-        tr("Downloading favicons (%1/%2)...").arg(QString::number(value), QString::number(total)));
+        tr("Downloading favicons (%1/%2)…").arg(QString::number(value), QString::number(total)));
 }
 
 void IconDownloaderDialog::updateCancelButton()
@@ -190,7 +208,7 @@ void IconDownloaderDialog::updateTable(const QString& url, const QString& messag
 void IconDownloaderDialog::abortDownloads()
 {
     for (auto* downloader : m_activeDownloaders) {
-        delete downloader;
+        downloader->deleteLater();
     }
     m_activeDownloaders.clear();
     updateProgressBar();

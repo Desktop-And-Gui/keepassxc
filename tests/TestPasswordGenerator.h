@@ -18,16 +18,32 @@
 #ifndef KEEPASSXC_TESTPASSWORDGENERATOR_H
 #define KEEPASSXC_TESTPASSWORDGENERATOR_H
 
+#include "core/PasswordGenerator.h"
 #include <QObject>
 
 class TestPasswordGenerator : public QObject
 {
     Q_OBJECT
 
+private:
+    PasswordGenerator m_generator;
+
 private slots:
     void initTestCase();
+    void init();
+
+    void testCustomCharacterSet_data();
+    void testCustomCharacterSet();
+    void testCharClasses_data();
     void testCharClasses();
+    void testLookalikeExclusion_data();
     void testLookalikeExclusion();
+    void testMinLength_data();
+    void testMinLength();
+    void testValidity_data();
+    void testValidity();
+    void testReset();
+    void testCreateFromConfig();
 };
 
 #endif // KEEPASSXC_TESTPASSWORDGENERATOR_H

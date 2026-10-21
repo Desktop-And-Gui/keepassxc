@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2019 Aetf <aetf@unlimitedcodeworks.xyz>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -23,23 +24,36 @@
 #include "fdosecrets/objects/Service.h"
 #include "fdosecrets/objects/Session.h"
 
-#include "core/Entry.h"
 #include "core/EntryAttributes.h"
+#include "core/EntryPlaceholders.h"
 #include "core/Group.h"
-#include "core/Tools.h"
 
 #include <QMimeDatabase>
-#include <QRegularExpression>
 #include <QSet>
-#include <QTextCodec>
+#include <QStringDecoder>
 
 namespace FdoSecrets
 {
+    struct EntryUpdater
+    {
+        Entry* entry;
+        explicit EntryUpdater(Entry* entry)
+            : entry(entry)
+        {
+            entry->beginUpdate();
+        }
 
-    const QSet<QString> Item::ReadOnlyAttributes(QSet<QString>() << ItemAttributes::UuidKey << ItemAttributes::PathKey);
+        ~EntryUpdater()
+        {
+            entry->endUpdate();
+        }
+    };
 
-    static void setEntrySecret(Entry* entry, const QByteArray& data, const QString& contentType);
-    static SecretStruct getEntrySecret(Entry* entry);
+    const QSet<QString> Item::ReadOnlyAttributes(QSet<QString>() << ItemAttributes::UuidKey << ItemAttributes::PathKey
+                                                                 << ItemAttributes::TotpKey);
+
+    static DBusResult setEntrySecret(Entry* entry, const QByteArray& data, const QString& contentType);
+    static Secret getEntrySecret(Entry* entry);
 
     namespace
     {
@@ -47,39 +61,47 @@ namespace FdoSecrets
         constexpr auto FDO_SECRETS_CONTENT_TYPE = "FDO_SECRETS_CONTENT_TYPE";
     } // namespace
 
+    Item* Item::Create(Collection* parent, Entry* backend)
+    {
+        QScopedPointer<Item> res{new Item(parent, backend)};
+        if (!res->dbus()->registerObject(res.data())) {
+            return nullptr;
+        }
+
+        return res.take();
+    }
+
     Item::Item(Collection* parent, Entry* backend)
         : DBusObject(parent)
         , m_backend(backend)
     {
-        Q_ASSERT(!p()->objectPath().path().isEmpty());
-
-        registerWithPath(QStringLiteral(DBUS_PATH_TEMPLATE_ITEM).arg(p()->objectPath().path(), m_backend->uuidToHex()),
-                         new ItemAdaptor(this));
-
-        connect(m_backend.data(), &Entry::entryModified, this, &Item::itemChanged);
+        connect(m_backend, &Entry::modified, this, &Item::itemChanged);
     }
 
-    DBusReturn<bool> Item::locked() const
+    DBusResult Item::locked(const DBusClientPtr& client, bool& locked) const
     {
         auto ret = ensureBackend();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
-        return collection()->locked();
+        ret = collection()->locked(locked);
+        if (ret.err()) {
+            return ret;
+        }
+        locked = locked || !client->itemAuthorized(m_backend->uuid());
+        return {};
     }
 
-    DBusReturn<const StringStringMap> Item::attributes() const
+    DBusResult Item::attributes(StringStringMap& attrs) const
     {
         auto ret = ensureBackend();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
         ret = ensureUnlocked();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
-
-        StringStringMap attrs;
 
         // add default attributes except password
         auto entryAttrs = m_backend->attributes();
@@ -90,7 +112,7 @@ namespace FdoSecrets
 
             auto value = entryAttrs->value(attr);
             if (entryAttrs->isReference(attr)) {
-                value = m_backend->maskPasswordPlaceholders(value);
+                value = EntryPlaceholders::maskPasswordPlaceholders(value);
                 value = m_backend->resolveMultiplePlaceholders(value);
             }
             attrs[attr] = value;
@@ -99,189 +121,215 @@ namespace FdoSecrets
         // add custom attributes
         const auto customKeys = entryAttrs->customKeys();
         for (const auto& attr : customKeys) {
-            // decode attr key
-            auto decoded = decodeAttributeKey(attr);
-
-            attrs[decoded] = entryAttrs->value(attr);
+            if (entryAttrs->isProtected(attr)) {
+                continue;
+            }
+            attrs[attr] = entryAttrs->value(attr);
         }
 
         // add some informative and readonly attributes
         attrs[ItemAttributes::UuidKey] = m_backend->uuidToHex();
         attrs[ItemAttributes::PathKey] = path();
-        return attrs;
+        if (m_backend->hasValidTotp()) {
+            attrs[ItemAttributes::TotpKey] = m_backend->totp();
+        }
+        return {};
     }
 
-    DBusReturn<void> Item::setAttributes(const StringStringMap& attrs)
+    DBusResult Item::setAttributes(const StringStringMap& attrs)
     {
         auto ret = ensureBackend();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
         ret = ensureUnlocked();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
 
-        m_backend->beginUpdate();
-
-        auto entryAttrs = m_backend->attributes();
+        // set on a temp variable first and check for errors to avoid partial updates
+        EntryAttributes tempAttrs;
+        tempAttrs.copyDataFrom(m_backend->attributes());
         for (auto it = attrs.constBegin(); it != attrs.constEnd(); ++it) {
-            if (entryAttrs->isProtected(it.key()) || it.key() == EntryAttributes::PasswordKey) {
-                continue;
+            if (tempAttrs.isProtected(it.key()) || it.key() == EntryAttributes::PasswordKey) {
+                return QDBusError::InvalidArgs;
             }
 
             if (ReadOnlyAttributes.contains(it.key())) {
-                continue;
+                return QDBusError::InvalidArgs;
             }
 
-            auto encoded = encodeAttributeKey(it.key());
-            entryAttrs->set(encoded, it.value());
+            if (EntryPlaceholders::matchReference(it.value()).hasMatch()) {
+                return QDBusError::InvalidArgs;
+            }
+
+            tempAttrs.set(it.key(), it.value());
         }
 
-        m_backend->endUpdate();
-
+        // actually update the backend
+        EntryUpdater eu(m_backend);
+        m_backend->attributes()->copyDataFrom(&tempAttrs);
         return {};
     }
 
-    DBusReturn<QString> Item::label() const
+    DBusResult Item::label(QString& label) const
     {
         auto ret = ensureBackend();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
         ret = ensureUnlocked();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
 
-        return m_backend->title();
+        label = m_backend->title();
+        return {};
     }
 
-    DBusReturn<void> Item::setLabel(const QString& label)
+    DBusResult Item::setLabel(const QString& label)
     {
         auto ret = ensureBackend();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
         ret = ensureUnlocked();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
 
-        m_backend->beginUpdate();
+        if (EntryPlaceholders::matchReference(label).hasMatch()) {
+            return QDBusError::InvalidArgs;
+        }
+
+        EntryUpdater eu(m_backend);
         m_backend->setTitle(label);
-        m_backend->endUpdate();
-
         return {};
     }
 
-    DBusReturn<qulonglong> Item::created() const
+    DBusResult Item::created(qulonglong& created) const
     {
         auto ret = ensureBackend();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
         ret = ensureUnlocked();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
 
-        return static_cast<qulonglong>(m_backend->timeInfo().creationTime().toMSecsSinceEpoch() / 1000);
+        created = static_cast<qulonglong>(m_backend->timeInfo().creationTime().toMSecsSinceEpoch() / 1000);
+        return {};
     }
 
-    DBusReturn<qulonglong> Item::modified() const
+    DBusResult Item::modified(qulonglong& modified) const
     {
         auto ret = ensureBackend();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
         ret = ensureUnlocked();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
 
-        return static_cast<qulonglong>(m_backend->timeInfo().lastModificationTime().toMSecsSinceEpoch() / 1000);
+        modified = static_cast<qulonglong>(m_backend->timeInfo().lastModificationTime().toMSecsSinceEpoch() / 1000);
+        return {};
     }
 
-    DBusReturn<PromptBase*> Item::deleteItem()
+    DBusResult Item::remove(PromptBase*& prompt)
     {
         auto ret = ensureBackend();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
-        auto prompt = new DeleteItemPrompt(service(), this);
-        return prompt;
+        prompt = PromptBase::Create<DeleteItemPrompt>(service(), this);
+        if (!prompt) {
+            return QDBusError::InternalError;
+        }
+        return {};
     }
 
-    DBusReturn<SecretStruct> Item::getSecret(Session* session)
+    DBusResult Item::getSecret(const DBusClientPtr& client, Session* session, Secret& secret)
+    {
+        auto ret = getSecretNoNotification(client, session, secret);
+        if (ret.ok()) {
+            service()->plugin()->emitRequestShowNotification(
+                tr(R"(Entry "%1" from database "%2" was used by %3)")
+                    .arg(m_backend->title(), collection()->name(), client->name()));
+        }
+        return ret;
+    }
+
+    DBusResult Item::getSecretNoNotification(const DBusClientPtr& client, Session* session, Secret& secret) const
     {
         auto ret = ensureBackend();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
         ret = ensureUnlocked();
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
+        }
+        if (!client->itemAuthorizedResetOnce(backend()->uuid())) {
+            return DBusResult(DBUS_ERROR_SECRET_IS_LOCKED);
         }
 
         if (!session) {
-            return DBusReturn<>::Error(QStringLiteral(DBUS_ERROR_SECRET_NO_SESSION));
+            return DBusResult(DBUS_ERROR_SECRET_NO_SESSION);
         }
 
-        auto secret = getEntrySecret(m_backend);
+        secret = getEntrySecret(m_backend);
 
         // encode using session
         secret = session->encode(secret);
 
-        // show notification is this was directly called from DBus
-        if (calledFromDBus()) {
-            service()->plugin()->emitRequestShowNotification(
-                tr(R"(Entry "%1" from database "%2" was used by %3)")
-                    .arg(m_backend->title(), collection()->name(), callingPeerName()));
-        }
-        return secret;
-    }
-
-    DBusReturn<void> Item::setSecret(const SecretStruct& secret)
-    {
-        auto ret = ensureBackend();
-        if (ret.isError()) {
-            return ret;
-        }
-        ret = ensureUnlocked();
-        if (ret.isError()) {
-            return ret;
-        }
-
-        auto session = pathToObject<Session>(secret.session);
-        if (!session) {
-            return DBusReturn<>::Error(QStringLiteral(DBUS_ERROR_SECRET_NO_SESSION));
-        }
-
-        // decode using session
-        auto decoded = session->decode(secret);
-
-        // set in backend
-        m_backend->beginUpdate();
-        setEntrySecret(m_backend, decoded.value, decoded.contentType);
-        m_backend->endUpdate();
-
         return {};
     }
 
-    DBusReturn<void> Item::setProperties(const QVariantMap& properties)
+    DBusResult Item::setSecret(const DBusClientPtr& client, const Secret& secret)
     {
-        auto label = properties.value(QStringLiteral(DBUS_INTERFACE_SECRET_ITEM ".Label")).toString();
+        auto ret = ensureBackend();
+        if (ret.err()) {
+            return ret;
+        }
+        ret = ensureUnlocked();
+        if (ret.err()) {
+            return ret;
+        }
+        if (!client->itemAuthorizedResetOnce(backend()->uuid())) {
+            return DBusResult(DBUS_ERROR_SECRET_IS_LOCKED);
+        }
+
+        if (!secret.session) {
+            return DBusResult(DBUS_ERROR_SECRET_NO_SESSION);
+        }
+
+        // decode using session
+        auto decoded = secret.session->decode(secret);
+
+        // block references
+        if (EntryPlaceholders::matchReference(decoded.value).hasMatch()) {
+            return QDBusError::InvalidArgs;
+        }
+
+        EntryUpdater eu(m_backend);
+        // set in backend
+        return setEntrySecret(m_backend, decoded.value, decoded.contentType);
+    }
+
+    DBusResult Item::setProperties(const QVariantMap& properties)
+    {
+        auto label = properties.value(DBUS_INTERFACE_SECRET_ITEM + ".Label").toString();
 
         auto ret = setLabel(label);
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
 
-        auto attributes = qdbus_cast<StringStringMap>(
-            properties.value(QStringLiteral(DBUS_INTERFACE_SECRET_ITEM ".Attributes")).value<QDBusArgument>());
+        auto attributes = properties.value(DBUS_INTERFACE_SECRET_ITEM + ".Attributes").value<StringStringMap>();
         ret = setAttributes(attributes);
-        if (ret.isError()) {
+        if (ret.err()) {
             return ret;
         }
 
@@ -290,25 +338,26 @@ namespace FdoSecrets
 
     Collection* Item::collection() const
     {
-        return qobject_cast<Collection*>(p());
+        return qobject_cast<Collection*>(parent());
     }
 
-    DBusReturn<void> Item::ensureBackend() const
+    DBusResult Item::ensureBackend() const
     {
         if (!m_backend) {
-            return DBusReturn<>::Error(QStringLiteral(DBUS_ERROR_SECRET_NO_SUCH_OBJECT));
+            return DBusResult(DBUS_ERROR_SECRET_NO_SUCH_OBJECT);
         }
         return {};
     }
 
-    DBusReturn<void> Item::ensureUnlocked() const
+    DBusResult Item::ensureUnlocked() const
     {
-        auto locked = collection()->locked();
-        if (locked.isError()) {
-            return locked;
+        bool l;
+        auto ret = collection()->locked(l);
+        if (ret.err()) {
+            return ret;
         }
-        if (locked.value()) {
-            return DBusReturn<>::Error(QStringLiteral(DBUS_ERROR_SECRET_IS_LOCKED));
+        if (l) {
+            return DBusResult(DBUS_ERROR_SECRET_IS_LOCKED);
         }
         return {};
     }
@@ -318,14 +367,21 @@ namespace FdoSecrets
         return m_backend;
     }
 
-    void Item::doDelete()
+    bool Item::doDelete()
+    {
+        Q_ASSERT(m_backend);
+
+        return collection()->doDeleteEntry(m_backend);
+    }
+
+    void Item::removeFromDBus()
     {
         emit itemAboutToDelete();
 
         // Unregister current path early, do not rely on deleteLater's call to destructor
         // as in case of Entry moving between groups, new Item will be created at the same DBus path
         // before the current Item is deleted in the event loop.
-        unregisterCurrentPath();
+        dbus()->unregisterObject(this);
 
         m_backend = nullptr;
         deleteLater();
@@ -349,22 +405,12 @@ namespace FdoSecrets
         Q_ASSERT(group);
 
         // root group is represented by a single slash, thus adding an empty component.
-        pathComponents.prepend(QLatin1Literal(""));
+        pathComponents.prepend("");
 
         return pathComponents.join('/');
     }
 
-    QString Item::encodeAttributeKey(const QString& key)
-    {
-        return QUrl::toPercentEncoding(key, "", "_:").replace('%', '_');
-    }
-
-    QString Item::decodeAttributeKey(const QString& key)
-    {
-        return QString::fromUtf8(QByteArray::fromPercentEncoding(key.toLatin1(), '_'));
-    }
-
-    void setEntrySecret(Entry* entry, const QByteArray& data, const QString& contentType)
+    DBusResult setEntrySecret(Entry* entry, const QByteArray& data, const QString& contentType)
     {
         auto mimeName = contentType.split(';').takeFirst().trimmed();
 
@@ -373,42 +419,55 @@ namespace FdoSecrets
         auto mimeType = db.mimeTypeForName(mimeName);
 
         // find a suitable codec
-        QTextCodec* codec = nullptr;
+        QStringDecoder decoder(QStringDecoder::Utf8);
         static const QRegularExpression charsetPattern(QStringLiteral(R"re(charset=(?<encode>.+)$)re"));
         auto match = charsetPattern.match(contentType);
         if (match.hasMatch()) {
-            codec = QTextCodec::codecForName(match.captured(QStringLiteral("encode")).toLatin1());
-        } else {
-            codec = QTextCodec::codecForName(QByteArrayLiteral("utf-8"));
+            auto codecName = match.captured(QStringLiteral("encode")).toUtf8();
+            auto encoding = QStringDecoder::encodingForName(codecName);
+            if (encoding != std::nullopt) {
+                decoder = QStringDecoder(encoding.value());
+            }
         }
 
-        if (!mimeType.isValid() || !mimeType.inherits(QStringLiteral("text/plain")) || !codec) {
-            // we can't handle this content type, save the data as attachment
+        if (!mimeType.isValid() || !mimeType.inherits(QStringLiteral("text/plain"))) {
+            if (EntryPlaceholders::matchReference(contentType).hasMatch()) {
+                return QDBusError::InvalidArgs;
+            }
+            // we can't handle this content type, save the data as attachment, and clear the password field
+            entry->setPassword("");
             entry->attachments()->set(FDO_SECRETS_DATA, data);
             entry->attributes()->set(FDO_SECRETS_CONTENT_TYPE, contentType);
-            return;
+        } else {
+            auto password = decoder.decode(data);
+            if (EntryPlaceholders::matchReference(password).hasMatch()) {
+                return QDBusError::InvalidArgs;
+            }
+            // save the data to password field
+            entry->setPassword(password);
+            if (entry->attachments()->hasKey(FDO_SECRETS_DATA)) {
+                entry->attachments()->remove(FDO_SECRETS_DATA);
+            }
+            if (entry->attributes()->hasKey(FDO_SECRETS_CONTENT_TYPE)) {
+                entry->attributes()->remove(FDO_SECRETS_CONTENT_TYPE);
+            }
         }
-
-        // save the data to password field
-        if (entry->attachments()->hasKey(FDO_SECRETS_DATA)) {
-            entry->attachments()->remove(FDO_SECRETS_DATA);
-        }
-        if (entry->attributes()->hasKey(FDO_SECRETS_CONTENT_TYPE)) {
-            entry->attributes()->remove(FDO_SECRETS_CONTENT_TYPE);
-        }
-
-        Q_ASSERT(codec);
-        entry->setPassword(codec->toUnicode(data));
+        return {};
     }
 
-    SecretStruct getEntrySecret(Entry* entry)
+    Secret getEntrySecret(Entry* entry)
     {
-        SecretStruct ss;
+        Secret ss{};
 
         if (entry->attachments()->hasKey(FDO_SECRETS_DATA)) {
             ss.value = entry->attachments()->value(FDO_SECRETS_DATA);
-            Q_ASSERT(entry->attributes()->hasKey(FDO_SECRETS_CONTENT_TYPE));
-            ss.contentType = entry->attributes()->value(FDO_SECRETS_CONTENT_TYPE);
+            if (entry->attributes()->hasKey(FDO_SECRETS_CONTENT_TYPE)) {
+                ss.contentType = entry->attributes()->value(FDO_SECRETS_CONTENT_TYPE);
+            } else {
+                // the entry is somehow corrupted, maybe the user deleted it.
+                // set to binary and hope for the best...
+                ss.contentType = QStringLiteral("application/octet-stream");
+            }
             return ss;
         }
 

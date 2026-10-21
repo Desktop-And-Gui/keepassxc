@@ -1,6 +1,5 @@
 /*
- *  Copyright (C) 2017 Sami Vänttinen <sami.vanttinen@protonmail.com>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,88 +15,92 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef BROWSERACTION_H
-#define BROWSERACTION_H
+#ifndef KEEPASSXC_BROWSERACTION_H
+#define KEEPASSXC_BROWSERACTION_H
 
+#include "BrowserMessageBuilder.h"
 #include "BrowserService.h"
+
+#include <QJsonArray>
 #include <QJsonObject>
-#include <QMutex>
-#include <QObject>
-#include <QtCore>
+#include <QString>
 
-class BrowserAction : public QObject
+class QLocalSocket;
+
+struct BrowserRequest
 {
-    Q_OBJECT
+    QString hash;
+    QString nonce;
+    QString incrementedNonce;
+    QJsonObject decrypted;
 
-    enum
+    inline bool isEmpty() const
     {
-        ERROR_KEEPASS_DATABASE_NOT_OPENED = 1,
-        ERROR_KEEPASS_DATABASE_HASH_NOT_RECEIVED = 2,
-        ERROR_KEEPASS_CLIENT_PUBLIC_KEY_NOT_RECEIVED = 3,
-        ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE = 4,
-        ERROR_KEEPASS_TIMEOUT_OR_NOT_CONNECTED = 5,
-        ERROR_KEEPASS_ACTION_CANCELLED_OR_DENIED = 6,
-        ERROR_KEEPASS_CANNOT_ENCRYPT_MESSAGE = 7,
-        ERROR_KEEPASS_ASSOCIATION_FAILED = 8,
-        ERROR_KEEPASS_KEY_CHANGE_FAILED = 9,
-        ERROR_KEEPASS_ENCRYPTION_KEY_UNRECOGNIZED = 10,
-        ERROR_KEEPASS_NO_SAVED_DATABASES_FOUND = 11,
-        ERROR_KEEPASS_INCORRECT_ACTION = 12,
-        ERROR_KEEPASS_EMPTY_MESSAGE_RECEIVED = 13,
-        ERROR_KEEPASS_NO_URL_PROVIDED = 14,
-        ERROR_KEEPASS_NO_LOGINS_FOUND = 15,
-        ERROR_KEEPASS_NO_GROUPS_FOUND = 16,
-        ERROR_KEEPASS_CANNOT_CREATE_NEW_GROUP = 17
-    };
+        return decrypted.isEmpty();
+    }
 
+    inline QJsonArray getArray(const QString& param) const
+    {
+        return decrypted.value(param).toArray();
+    }
+
+    inline bool getBool(const QString& param) const
+    {
+        return decrypted.value(param).toBool();
+    }
+
+    inline QJsonObject getObject(const QString& param) const
+    {
+        return decrypted.value(param).toObject();
+    }
+
+    inline QString getString(const QString& param) const
+    {
+        return decrypted.value(param).toString();
+    }
+};
+
+class BrowserAction
+{
 public:
-    BrowserAction(BrowserService& browserService);
+    explicit BrowserAction() = default;
     ~BrowserAction() = default;
 
-    QJsonObject readResponse(const QJsonObject& json);
+    QJsonObject processClientMessage(QLocalSocket* socket, const QJsonObject& json);
 
 private:
-    QJsonObject handleAction(const QJsonObject& json);
+    QJsonObject handleAction(QLocalSocket* socket, const QJsonObject& json);
     QJsonObject handleChangePublicKeys(const QJsonObject& json, const QString& action);
     QJsonObject handleGetDatabaseHash(const QJsonObject& json, const QString& action);
     QJsonObject handleAssociate(const QJsonObject& json, const QString& action);
     QJsonObject handleTestAssociate(const QJsonObject& json, const QString& action);
     QJsonObject handleGetLogins(const QJsonObject& json, const QString& action);
-    QJsonObject handleGeneratePassword(const QJsonObject& json, const QString& action);
+    QJsonObject handleGeneratePassword(QLocalSocket* socket, const QJsonObject& json, const QString& action);
     QJsonObject handleSetLogin(const QJsonObject& json, const QString& action);
     QJsonObject handleLockDatabase(const QJsonObject& json, const QString& action);
     QJsonObject handleGetDatabaseGroups(const QJsonObject& json, const QString& action);
+    QJsonObject handleGetDatabaseEntries(const QJsonObject& json, const QString& action);
     QJsonObject handleCreateNewGroup(const QJsonObject& json, const QString& action);
+    QJsonObject handleGetTotp(const QJsonObject& json, const QString& action);
+    QJsonObject handleDeleteEntry(const QJsonObject& json, const QString& action);
+    QJsonObject handleGlobalAutoType(const QJsonObject& json, const QString& action);
+    QJsonObject handlePasskeysGet(const QJsonObject& json, const QString& action);
+    QJsonObject handlePasskeysRegister(const QJsonObject& json, const QString& action);
 
-    QJsonObject buildMessage(const QString& nonce) const;
-    QJsonObject buildResponse(const QString& action, const QJsonObject& message, const QString& nonce);
+    QJsonObject buildResponse(const QString& action, const QString& nonce, const Parameters& params = {});
     QJsonObject getErrorReply(const QString& action, const int errorCode) const;
-    QString getErrorMessage(const int errorCode) const;
-    QString getReturnValue(const BrowserService::ReturnValue returnValue) const;
-    QString getDatabaseHash();
-    QString getLegacyDatabaseHash();
-
-    QString encryptMessage(const QJsonObject& message, const QString& nonce);
     QJsonObject decryptMessage(const QString& message, const QString& nonce);
-    QString encrypt(const QString& plaintext, const QString& nonce);
-    QByteArray decrypt(const QString& encrypted, const QString& nonce);
+    BrowserRequest decodeRequest(const QJsonObject& json);
+    StringPairList getConnectionKeys(const BrowserRequest& browserRequest);
 
-    QString getBase64FromKey(const uchar* array, const uint len);
-    QByteArray getQByteArray(const uchar* array, const uint len) const;
-    QJsonObject getJsonObject(const uchar* pArray, const uint len) const;
-    QJsonObject getJsonObject(const QByteArray& ba) const;
-    QByteArray base64Decode(const QString& str);
-    QString incrementNonce(const QString& nonce);
+    static const int MaxUrlLength;
 
-private:
-    QMutex m_mutex;
-    BrowserService& m_browserService;
     QString m_clientPublicKey;
     QString m_publicKey;
     QString m_secretKey;
-    bool m_associated;
+    bool m_associated = false;
 
     friend class TestBrowser;
 };
 
-#endif // BROWSERACTION_H
+#endif // KEEPASSXC_BROWSERACTION_H

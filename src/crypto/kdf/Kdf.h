@@ -44,16 +44,28 @@ public:
     virtual bool transform(const QByteArray& raw, QByteArray& result) const = 0;
     virtual QSharedPointer<Kdf> clone() const = 0;
 
-    int benchmark(int msec) const;
+    virtual QString toString() const = 0;
+
+    virtual int benchmark(int msec) const = 0;
+
+    /*
+     * Default target encryption time, in MS.
+     */
+    static const int DEFAULT_ENCRYPTION_TIME = 1000;
+    /*
+     * Minimum target encryption time, in MS.
+     */
+    static const int MIN_ENCRYPTION_TIME = 100;
+    /*
+     * Maximum target encryption time, in MS.
+     */
+    static const int MAX_ENCRYPTION_TIME = 5000;
 
 protected:
-    virtual int benchmarkImpl(int msec) const = 0;
-
     int m_rounds;
     QByteArray m_seed;
 
 private:
-    class BenchmarkThread;
     const QUuid m_uuid;
 };
 #endif // KEEPASSX_KDF_H

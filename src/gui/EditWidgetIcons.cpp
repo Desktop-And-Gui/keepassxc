@@ -19,22 +19,25 @@
 #include "EditWidgetIcons.h"
 #include "ui_EditWidgetIcons.h"
 
-#include <QFileDialog>
-#include <QMessageBox>
-
+#include "core/Clock.h"
 #include "core/Config.h"
-#include "core/Group.h"
+#include "core/Database.h"
 #include "core/Metadata.h"
 #include "core/Tools.h"
+#include "gui/FileDialog.h"
 #include "gui/IconModels.h"
+#include "gui/Icons.h"
 #include "gui/MessageBox.h"
-#ifdef WITH_XC_NETWORKING
-#include "core/IconDownloader.h"
+#ifdef KPXC_FEATURE_NETWORK
+#include "gui/IconDownloader.h"
 #endif
+
+#include <QKeyEvent>
 
 IconStruct::IconStruct()
     : uuid(QUuid())
     , number(0)
+    , applyTo(ApplyIconToOptions::THIS_ONLY)
 {
 }
 
@@ -45,7 +48,7 @@ EditWidgetIcons::EditWidgetIcons(QWidget* parent)
     , m_applyIconTo(ApplyIconToOptions::THIS_ONLY)
     , m_defaultIconModel(new DefaultIconModel(this))
     , m_customIconModel(new CustomIconModel(this))
-#ifdef WITH_XC_NETWORKING
+#ifdef KPXC_FEATURE_NETWORK
     , m_downloader(new IconDownloader())
 #endif
 {
@@ -62,7 +65,6 @@ EditWidgetIcons::EditWidgetIcons(QWidget* parent)
     connect(m_ui->defaultIconsRadio, SIGNAL(toggled(bool)), this, SLOT(updateWidgetsDefaultIcons(bool)));
     connect(m_ui->customIconsRadio, SIGNAL(toggled(bool)), this, SLOT(updateWidgetsCustomIcons(bool)));
     connect(m_ui->addButton, SIGNAL(clicked()), SLOT(addCustomIconFromFile()));
-    connect(m_ui->deleteButton, SIGNAL(clicked()), SLOT(removeCustomIcon()));
     connect(m_ui->faviconButton, SIGNAL(clicked()), SLOT(downloadFavicon()));
     connect(m_ui->applyIconToPushButton->menu(), SIGNAL(triggered(QAction*)), SLOT(confirmApplyIconTo(QAction*)));
 
@@ -71,20 +73,20 @@ EditWidgetIcons::EditWidgetIcons(QWidget* parent)
             this, SIGNAL(widgetUpdated()));
     connect(m_ui->customIconsView->selectionModel(), SIGNAL(selectionChanged(QItemSelection,QItemSelection)),
             this, SIGNAL(widgetUpdated()));
-#ifdef WITH_XC_NETWORKING
+#ifdef KPXC_FEATURE_NETWORK
     connect(m_downloader.data(),
             SIGNAL(finished(const QString&, const QImage&)),
             SLOT(iconReceived(const QString&, const QImage&)));
 #endif
     // clang-format on
 
+#ifndef KPXC_FEATURE_NETWORK
     m_ui->faviconButton->setVisible(false);
-    m_ui->addButton->setEnabled(true);
+    m_ui->faviconURL->setVisible(false);
+#endif
 }
 
-EditWidgetIcons::~EditWidgetIcons()
-{
-}
+EditWidgetIcons::~EditWidgetIcons() = default;
 
 IconStruct EditWidgetIcons::state()
 {
@@ -131,7 +133,7 @@ void EditWidgetIcons::load(const QUuid& currentUuid,
     m_currentUuid = currentUuid;
     setUrl(url);
 
-    m_customIconModel->setIcons(database->metadata()->customIconsScaledPixmaps(),
+    m_customIconModel->setIcons(Icons::customIconsPixmaps(database.data(), IconSize::Default),
                                 database->metadata()->customIconsOrder());
 
     QUuid iconUuid = iconStruct.uuid;
@@ -162,7 +164,7 @@ void EditWidgetIcons::setShowApplyIconToButton(bool state)
 QMenu* EditWidgetIcons::createApplyIconToMenu()
 {
     auto* applyIconToMenu = new QMenu(this);
-    QAction* defaultAction = applyIconToMenu->addAction(tr("Apply to this only"));
+    QAction* defaultAction = applyIconToMenu->addAction(tr("Apply to this group only"));
     defaultAction->setData(QVariant::fromValue(ApplyIconToOptions::THIS_ONLY));
     applyIconToMenu->setDefaultAction(defaultAction);
     applyIconToMenu->addSeparator();
@@ -175,22 +177,36 @@ QMenu* EditWidgetIcons::createApplyIconToMenu()
     return applyIconToMenu;
 }
 
+void EditWidgetIcons::keyPressEvent(QKeyEvent* event)
+{
+    if (m_ui->faviconURL->hasFocus() && (event->key() == Qt::Key_Enter || event->key() == Qt::Key_Return)) {
+        m_ui->faviconButton->animateClick();
+    } else {
+        QWidget::keyPressEvent(event);
+    }
+}
+
 void EditWidgetIcons::setUrl(const QString& url)
 {
-#ifdef WITH_XC_NETWORKING
-    m_url = url;
-    m_ui->faviconButton->setVisible(!url.isEmpty());
+#ifdef KPXC_FEATURE_NETWORK
+    QUrl urlCheck(url);
+    if (urlCheck.scheme().startsWith("http")) {
+        m_ui->faviconURL->setText(urlCheck.url(QUrl::RemovePath | QUrl::RemoveQuery | QUrl::RemoveFragment));
+        m_ui->faviconURL->setCursorPosition(0);
+    } else {
+        m_ui->faviconURL->setText("");
+    }
 #else
     Q_UNUSED(url);
-    m_ui->faviconButton->setVisible(false);
 #endif
 }
 
 void EditWidgetIcons::downloadFavicon()
 {
-#ifdef WITH_XC_NETWORKING
-    if (!m_url.isEmpty()) {
-        m_downloader->setUrl(m_url);
+#ifdef KPXC_FEATURE_NETWORK
+    auto url = m_ui->faviconURL->text();
+    if (!url.isEmpty()) {
+        m_downloader->setUrl(url);
         m_downloader->download();
     }
 #endif
@@ -198,13 +214,13 @@ void EditWidgetIcons::downloadFavicon()
 
 void EditWidgetIcons::iconReceived(const QString& url, const QImage& icon)
 {
-#ifdef WITH_XC_NETWORKING
+#ifdef KPXC_FEATURE_NETWORK
     Q_UNUSED(url);
     if (icon.isNull()) {
         QString message(tr("Unable to fetch favicon."));
-        if (!config()->get("security/IconDownloadFallback", false).toBool()) {
+        if (!config()->get(Config::Security_IconDownloadFallback).toBool()) {
             message.append("\n").append(
-                tr("You can enable the DuckDuckGo website icon service under Tools -> Settings -> Security"));
+                tr("You can enable the DuckDuckGo website icon service under Application Settings -> Security"));
         }
         emit messageEditEntry(message, MessageWidget::Error);
         return;
@@ -221,7 +237,7 @@ void EditWidgetIcons::iconReceived(const QString& url, const QImage& icon)
 
 void EditWidgetIcons::abortRequests()
 {
-#ifdef WITH_XC_NETWORKING
+#ifdef KPXC_FEATURE_NETWORK
     if (m_downloader) {
         m_downloader->abortDownload();
     }
@@ -234,9 +250,9 @@ void EditWidgetIcons::addCustomIconFromFile()
         return;
     }
 
-    QString filter = QString("%1 (%2);;%3 (*)").arg(tr("Images"), Tools::imageReaderFilter(), tr("All files"));
-
-    auto filenames = QFileDialog::getOpenFileNames(this, tr("Select Image(s)"), "", filter);
+    auto filter = QString("%1 (%2);;%3 (*)").arg(tr("Images"), Icons::imageFormatsFilter(), tr("All files"));
+    auto filenames =
+        fileDialog()->getOpenFileNames(this, tr("Select Image(s)"), FileDialog::getLastDir("icons"), filter);
     if (!filenames.empty()) {
         QStringList errornames;
         int numexisting = 0;
@@ -245,12 +261,15 @@ void EditWidgetIcons::addCustomIconFromFile()
                 auto icon = QImage(filename);
                 if (icon.isNull()) {
                     errornames << filename;
-                } else if (!addCustomIcon(icon)) {
+                } else if (!addCustomIcon(icon, QFileInfo(filename).baseName())) {
                     // Icon already exists in database
                     ++numexisting;
                 }
             }
         }
+
+        // Save last used directory using first image path
+        FileDialog::saveLastDir("icons", filenames[0]);
 
         int numloaded = filenames.size() - errornames.size() - numexisting;
         QString msg;
@@ -279,21 +298,22 @@ void EditWidgetIcons::addCustomIconFromFile()
     }
 }
 
-bool EditWidgetIcons::addCustomIcon(const QImage& icon)
+bool EditWidgetIcons::addCustomIcon(const QImage& icon, const QString& name)
 {
     bool added = false;
     if (m_db) {
         // Don't add an icon larger than 128x128, but retain original size if smaller
-        auto scaledicon = icon;
+        auto scaledIcon = icon;
         if (icon.width() > 128 || icon.height() > 128) {
-            scaledicon = icon.scaled(128, 128);
+            scaledIcon = icon.scaled(128, 128);
         }
 
-        QUuid uuid = m_db->metadata()->findCustomIcon(scaledicon);
+        QByteArray serializedIcon = Icons::saveToBytes(scaledIcon);
+        QUuid uuid = m_db->metadata()->findCustomIcon(serializedIcon);
         if (uuid.isNull()) {
             uuid = QUuid::createUuid();
-            m_db->metadata()->addCustomIcon(uuid, scaledicon);
-            m_customIconModel->setIcons(m_db->metadata()->customIconsScaledPixmaps(),
+            m_db->metadata()->addCustomIcon(uuid, serializedIcon, name, Clock::currentDateTimeUtc());
+            m_customIconModel->setIcons(Icons::customIconsPixmaps(m_db.data(), IconSize::Default),
                                         m_db->metadata()->customIconsOrder());
             added = true;
         }
@@ -309,91 +329,6 @@ bool EditWidgetIcons::addCustomIcon(const QImage& icon)
     return added;
 }
 
-void EditWidgetIcons::removeCustomIcon()
-{
-    if (m_db) {
-        QModelIndex index = m_ui->customIconsView->currentIndex();
-        if (index.isValid()) {
-            QUuid iconUuid = m_customIconModel->uuidFromIndex(index);
-
-            const QList<Entry*> allEntries = m_db->rootGroup()->entriesRecursive(true);
-            QList<Entry*> entriesWithSameIcon;
-            QList<Entry*> historyEntriesWithSameIcon;
-
-            for (Entry* entry : allEntries) {
-                if (iconUuid == entry->iconUuid()) {
-                    // Check if this is a history entry (no assigned group)
-                    if (!entry->group()) {
-                        historyEntriesWithSameIcon << entry;
-                    } else if (m_currentUuid != entry->uuid()) {
-                        entriesWithSameIcon << entry;
-                    }
-                }
-            }
-
-            const QList<Group*> allGroups = m_db->rootGroup()->groupsRecursive(true);
-            QList<Group*> groupsWithSameIcon;
-
-            for (Group* group : allGroups) {
-                if (iconUuid == group->iconUuid() && m_currentUuid != group->uuid()) {
-                    groupsWithSameIcon << group;
-                }
-            }
-
-            int iconUseCount = entriesWithSameIcon.size() + groupsWithSameIcon.size();
-            if (iconUseCount > 0) {
-
-                auto result = MessageBox::question(this,
-                                                   tr("Confirm Delete"),
-                                                   tr("This icon is used by %n entry(s), and will be replaced "
-                                                      "by the default icon. Are you sure you want to delete it?",
-                                                      "",
-                                                      iconUseCount),
-                                                   MessageBox::Delete | MessageBox::Cancel,
-                                                   MessageBox::Cancel);
-
-                if (result == MessageBox::Cancel) {
-                    // Early out, nothing is changed
-                    return;
-                } else {
-                    // Revert matched entries to the default entry icon
-                    for (Entry* entry : asConst(entriesWithSameIcon)) {
-                        entry->setIcon(Entry::DefaultIconNumber);
-                    }
-
-                    // Revert matched groups to the default group icon
-                    for (Group* group : asConst(groupsWithSameIcon)) {
-                        group->setIcon(Group::DefaultIconNumber);
-                    }
-                }
-            }
-
-            // Remove the icon from history entries
-            for (Entry* entry : asConst(historyEntriesWithSameIcon)) {
-                entry->setUpdateTimeinfo(false);
-                entry->setIcon(0);
-                entry->setUpdateTimeinfo(true);
-            }
-
-            // Remove the icon from the database
-            m_db->metadata()->removeCustomIcon(iconUuid);
-            m_customIconModel->setIcons(m_db->metadata()->customIconsScaledPixmaps(),
-                                        m_db->metadata()->customIconsOrder());
-
-            // Reset the current icon view
-            updateRadioButtonDefaultIcons();
-
-            if (m_db->rootGroup()->findEntryByUuid(m_currentUuid) != nullptr) {
-                m_ui->defaultIconsView->setCurrentIndex(m_defaultIconModel->index(Entry::DefaultIconNumber));
-            } else {
-                m_ui->defaultIconsView->setCurrentIndex(m_defaultIconModel->index(Group::DefaultIconNumber));
-            }
-
-            emit widgetUpdated();
-        }
-    }
-}
-
 void EditWidgetIcons::updateWidgetsDefaultIcons(bool check)
 {
     if (check) {
@@ -404,7 +339,6 @@ void EditWidgetIcons::updateWidgetsDefaultIcons(bool check)
             m_ui->defaultIconsView->setCurrentIndex(index);
         }
         m_ui->customIconsView->selectionModel()->clearSelection();
-        m_ui->deleteButton->setEnabled(false);
     }
 }
 
@@ -418,7 +352,6 @@ void EditWidgetIcons::updateWidgetsCustomIcons(bool check)
             m_ui->customIconsView->setCurrentIndex(index);
         }
         m_ui->defaultIconsView->selectionModel()->clearSelection();
-        m_ui->deleteButton->setEnabled(true);
     }
 }
 

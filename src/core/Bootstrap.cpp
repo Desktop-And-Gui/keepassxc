@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2020 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,9 +17,7 @@
 
 #include "Bootstrap.h"
 #include "config-keepassx.h"
-#include "core/Config.h"
 #include "core/Translator.h"
-#include "gui/MessageBox.h"
 
 #ifdef Q_OS_WIN
 #include <aclapi.h> // for createWindowsDACL()
@@ -65,64 +63,16 @@ namespace Bootstrap
      * Perform early application bootstrapping that does not rely on a QApplication
      * being present.
      */
-    void bootstrap()
+    void bootstrap(const QString& uiLanguage)
     {
 #ifdef QT_NO_DEBUG
         disableCoreDumps();
 #endif
+
         setupSearchPaths();
         applyEarlyQNetworkAccessManagerWorkaround();
-        Translator::installTranslators();
-    }
 
-    /**
-     * Perform early application bootstrapping such as setting up search paths,
-     * configuration OS security properties, and loading translators.
-     * A QApplication object has to be instantiated before calling this function.
-     */
-    void bootstrapApplication()
-    {
-        bootstrap();
-        MessageBox::initializeButtonDefs();
-
-#ifdef KEEPASSXC_DIST_SNAP
-        // snap: force fallback theme to avoid using system theme (gtk integration)
-        // with missing actions just like on Windows and macOS
-        QIcon::setThemeSearchPaths(QStringList() << ":/icons");
-#endif
-
-#ifdef Q_OS_MACOS
-        // Don't show menu icons on OSX
-        QApplication::setAttribute(Qt::AA_DontShowIconsInMenus);
-#endif
-    }
-
-    /**
-     * Restore the main window's state after launch
-     *
-     * @param mainWindow the main window whose state to restore
-     */
-    void restoreMainWindowState(MainWindow& mainWindow)
-    {
-        // start minimized if configured
-        if (config()->get("GUI/MinimizeOnStartup").toBool()) {
-            mainWindow.showMinimized();
-        } else {
-            mainWindow.bringToFront();
-        }
-
-        if (config()->get("OpenPreviousDatabasesOnStartup").toBool()) {
-            const QStringList fileNames = config()->get("LastOpenedDatabases").toStringList();
-            for (const QString& filename : fileNames) {
-                if (!filename.isEmpty() && QFile::exists(filename)) {
-                    mainWindow.openDatabase(filename);
-                }
-            }
-            auto lastActiveFile = config()->get("LastActiveDatabase").toString();
-            if (!lastActiveFile.isEmpty()) {
-                mainWindow.openDatabase(lastActiveFile);
-            }
-        }
+        Translator::installTranslators(uiLanguage);
     }
 
     // LCOV_EXCL_START
@@ -139,7 +89,9 @@ namespace Bootstrap
         success = success && (setrlimit(RLIMIT_CORE, &limit) == 0);
 #endif
 
-#if defined(HAVE_PR_SET_DUMPABLE)
+// NOTE: Dumps cannot be disabled for snap builds as it prevents desktop portals from working
+//       See https://github.com/keepassxreboot/keepassxc/issues/7607#issuecomment-1109005206
+#if defined(HAVE_PR_SET_DUMPABLE) && !defined(KEEPASSXC_DIST_SNAP)
         success = success && (prctl(PR_SET_DUMPABLE, 0) == 0);
 #endif
 
@@ -177,6 +129,8 @@ namespace Bootstrap
         DWORD cbBufferSize = 0;
         PSID pLocalSystemSid = nullptr;
         DWORD pLocalSystemSidSize = SECURITY_MAX_SID_SIZE;
+        PSID pOwnerRightsSid = nullptr;
+        DWORD pOwnerRightsSidSize = SECURITY_MAX_SID_SIZE;
 
         // Access control list
         PACL pACL = nullptr;
@@ -213,9 +167,22 @@ namespace Bootstrap
             goto Cleanup;
         }
 
+        // Retrieve CreatorOwnerRights SID
+        pOwnerRightsSid = static_cast<PSID>(HeapAlloc(GetProcessHeap(), 0, pOwnerRightsSidSize));
+        if (pOwnerRightsSid == nullptr) {
+            goto Cleanup;
+        }
+
+        if (!CreateWellKnownSid(WinCreatorOwnerRightsSid, nullptr, pOwnerRightsSid, &pOwnerRightsSidSize)) {
+            auto error = GetLastError();
+            Q_UNUSED(error)
+            goto Cleanup;
+        }
+
         // Calculate the amount of memory that must be allocated for the DACL
         cbACL = sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(pTokenUser->User.Sid)
-                + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(pLocalSystemSid);
+                + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(pLocalSystemSid) + sizeof(ACCESS_ALLOWED_ACE)
+                + GetLengthSid(pOwnerRightsSid);
 
         // Create and initialize an ACL
         pACL = static_cast<PACL>(HeapAlloc(GetProcessHeap(), 0, cbACL));
@@ -237,7 +204,12 @@ namespace Bootstrap
             goto Cleanup;
         }
 
-#ifdef WITH_XC_SSHAGENT
+        // Explicitly set "Process Owner" rights to Read Only. The default is Full Control.
+        if (!AddAccessAllowedAce(pACL, ACL_REVISION, READ_CONTROL, pOwnerRightsSid)) {
+            goto Cleanup;
+        }
+
+#ifdef KPXC_FEATURE_SSHAGENT
         // OpenSSH for Windows ssh-agent service is running as LocalSystem
         if (!AddAccessAllowedAce(pACL,
                                  ACL_REVISION,
@@ -261,16 +233,19 @@ namespace Bootstrap
 
     Cleanup:
 
-        if (pACL != nullptr) {
+        if (pACL) {
             HeapFree(GetProcessHeap(), 0, pACL);
         }
-        if (pLocalSystemSid != nullptr) {
+        if (pLocalSystemSid) {
             HeapFree(GetProcessHeap(), 0, pLocalSystemSid);
         }
-        if (pTokenUser != nullptr) {
+        if (pOwnerRightsSid) {
+            HeapFree(GetProcessHeap(), 0, pOwnerRightsSid);
+        }
+        if (pTokenUser) {
             HeapFree(GetProcessHeap(), 0, pTokenUser);
         }
-        if (hToken != nullptr) {
+        if (hToken) {
             CloseHandle(hToken);
         }
 #endif

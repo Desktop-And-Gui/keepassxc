@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -16,22 +17,38 @@
  */
 
 #include "Metadata.h"
-#include <QtCore/QCryptographicHash>
 
 #include "core/Clock.h"
-#include "core/Entry.h"
 #include "core/Group.h"
-#include "core/Tools.h"
+
+#include <QCryptographicHash>
+#include <QJsonDocument>
 
 const int Metadata::DefaultHistoryMaxItems = 10;
 const int Metadata::DefaultHistoryMaxSize = 6 * 1024 * 1024;
+const int Metadata::DefaultAutosaveDelayMin = 0;
+
+// Fallback icon for return by reference
+static const Metadata::CustomIconData NULL_ICON{};
+
+namespace customDataKeys
+{
+    static const QString savedSearch = QStringLiteral("KPXC_SavedSearch");
+    static const QString autosaveDelay = QStringLiteral("KPXC_autosaveDelayMin");
+}; // namespace customDataKeys
 
 Metadata::Metadata(QObject* parent)
-    : QObject(parent)
+    : ModifiableObject(parent)
     , m_customData(new CustomData(this))
     , m_updateDatetime(true)
 {
-    m_data.generator = "KeePassXC";
+    init();
+    connect(m_customData, &CustomData::modified, this, &Metadata::modified);
+}
+
+void Metadata::init()
+{
+    m_data.generator = QStringLiteral("KeePassXC");
     m_data.maintenanceHistoryDays = 365;
     m_data.masterKeyChangeRec = -1;
     m_data.masterKeyChangeForce = -1;
@@ -52,15 +69,22 @@ Metadata::Metadata(QObject* parent)
     m_entryTemplatesGroupChanged = now;
     m_masterKeyChanged = now;
     m_settingsChanged = now;
+}
 
-    connect(m_customData, SIGNAL(customDataModified()), this, SIGNAL(metadataModified()));
+void Metadata::clear()
+{
+    init();
+    m_customIcons.clear();
+    m_customIconsOrder.clear();
+    m_customIconsHashes.clear();
+    m_customData->clear();
 }
 
 template <class P, class V> bool Metadata::set(P& property, const V& value)
 {
     if (property != value) {
         property = value;
-        emit metadataModified();
+        emitModified();
         return true;
     } else {
         return false;
@@ -74,7 +98,7 @@ template <class P, class V> bool Metadata::set(P& property, const V& value, QDat
         if (m_updateDatetime) {
             dateTime = Clock::currentDateTimeUtc();
         }
-        emit metadataModified();
+        emitModified();
         return true;
     } else {
         return false;
@@ -131,7 +155,7 @@ int Metadata::maintenanceHistoryDays() const
     return m_data.maintenanceHistoryDays;
 }
 
-QColor Metadata::color() const
+QString Metadata::color() const
 {
     return m_data.color;
 }
@@ -161,67 +185,19 @@ bool Metadata::protectNotes() const
     return m_data.protectNotes;
 }
 
-QImage Metadata::customIcon(const QUuid& uuid) const
+const Metadata::CustomIconData& Metadata::customIcon(const QUuid& uuid) const
 {
-    return m_customIcons.value(uuid);
+    auto icon = m_customIcons.find(uuid);
+    Q_ASSERT(icon != m_customIcons.end());
+    if (icon == m_customIcons.end()) {
+        return NULL_ICON;
+    }
+    return icon.value();
 }
 
-QPixmap Metadata::customIconPixmap(const QUuid& uuid) const
-{
-    QPixmap pixmap;
-
-    if (!m_customIcons.contains(uuid)) {
-        return pixmap;
-    }
-
-    QPixmapCache::Key& cacheKey = m_customIconCacheKeys[uuid];
-
-    if (!QPixmapCache::find(cacheKey, &pixmap)) {
-        pixmap = QPixmap::fromImage(m_customIcons.value(uuid));
-        cacheKey = QPixmapCache::insert(pixmap);
-    }
-
-    return pixmap;
-}
-
-QPixmap Metadata::customIconScaledPixmap(const QUuid& uuid) const
-{
-    QPixmap pixmap;
-
-    if (!m_customIcons.contains(uuid)) {
-        return pixmap;
-    }
-
-    QPixmapCache::Key& cacheKey = m_customIconScaledCacheKeys[uuid];
-
-    if (!QPixmapCache::find(cacheKey, &pixmap)) {
-        QImage image = m_customIcons.value(uuid).scaled(16, 16, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-        pixmap = QPixmap::fromImage(image);
-        cacheKey = QPixmapCache::insert(pixmap);
-    }
-
-    return pixmap;
-}
-
-bool Metadata::containsCustomIcon(const QUuid& uuid) const
+bool Metadata::hasCustomIcon(const QUuid& uuid) const
 {
     return m_customIcons.contains(uuid);
-}
-
-QHash<QUuid, QImage> Metadata::customIcons() const
-{
-    return m_customIcons;
-}
-
-QHash<QUuid, QPixmap> Metadata::customIconsScaledPixmaps() const
-{
-    QHash<QUuid, QPixmap> result;
-
-    for (const QUuid& uuid : m_customIconsOrder) {
-        result.insert(uuid, customIconScaledPixmap(uuid));
-    }
-
-    return result;
 }
 
 QList<QUuid> Metadata::customIconsOrder() const
@@ -269,17 +245,17 @@ const Group* Metadata::lastTopVisibleGroup() const
     return m_lastTopVisibleGroup;
 }
 
-QDateTime Metadata::masterKeyChanged() const
+QDateTime Metadata::databaseKeyChanged() const
 {
     return m_masterKeyChanged;
 }
 
-int Metadata::masterKeyChangeRec() const
+int Metadata::databaseKeyChangeRec() const
 {
     return m_data.masterKeyChangeRec;
 }
 
-int Metadata::masterKeyChangeForce() const
+int Metadata::databaseKeyChangeForce() const
 {
     return m_data.masterKeyChangeForce;
 }
@@ -292,6 +268,19 @@ int Metadata::historyMaxItems() const
 int Metadata::historyMaxSize() const
 {
     return m_data.historyMaxSize;
+}
+
+int Metadata::autosaveDelayMin() const
+{
+    QString autosaveDelayMinStr = m_customData->value(customDataKeys::autosaveDelay);
+    if (autosaveDelayMinStr.isNull()) {
+        // data is not set yet, use default
+        return Metadata::DefaultAutosaveDelayMin;
+    }
+    bool ok; // check for QString to int op failure
+    int autosaveDelayMin = autosaveDelayMinStr.toInt(&ok);
+    Q_ASSERT(ok);
+    return autosaveDelayMin;
 }
 
 CustomData* Metadata::customData()
@@ -347,7 +336,7 @@ void Metadata::setMaintenanceHistoryDays(int value)
     set(m_data.maintenanceHistoryDays, value);
 }
 
-void Metadata::setColor(const QColor& value)
+void Metadata::setColor(const QString& value)
 {
     set(m_data.color, value);
 }
@@ -377,37 +366,31 @@ void Metadata::setProtectNotes(bool value)
     set(m_data.protectNotes, value);
 }
 
-void Metadata::addCustomIcon(const QUuid& uuid, const QImage& icon)
+void Metadata::addCustomIcon(const QUuid& uuid, const CustomIconData& iconData)
 {
+
     Q_ASSERT(!uuid.isNull());
     Q_ASSERT(!m_customIcons.contains(uuid));
 
-    m_customIcons[uuid] = icon;
-    // reset cache in case there is also an icon with that uuid
-    m_customIconCacheKeys[uuid] = QPixmapCache::Key();
-    m_customIconScaledCacheKeys[uuid] = QPixmapCache::Key();
     // remove all uuids to prevent duplicates in release mode
+    m_customIcons[uuid] = iconData;
     m_customIconsOrder.removeAll(uuid);
     m_customIconsOrder.append(uuid);
+
     // Associate image hash to uuid
-    QByteArray hash = hashImage(icon);
+    QByteArray hash = hashIcon(iconData.data);
     m_customIconsHashes[hash] = uuid;
     Q_ASSERT(m_customIcons.count() == m_customIconsOrder.count());
-    emit metadataModified();
+
+    emitModified();
 }
 
-void Metadata::addCustomIconScaled(const QUuid& uuid, const QImage& icon)
+void Metadata::addCustomIcon(const QUuid& uuid,
+                             const QByteArray& iconBytes,
+                             const QString& name,
+                             const QDateTime& lastModified)
 {
-    QImage iconScaled;
-
-    // scale down to 128x128 if icon is larger
-    if (icon.width() > 128 || icon.height() > 128) {
-        iconScaled = icon.scaled(QSize(128, 128), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    } else {
-        iconScaled = icon;
-    }
-
-    addCustomIcon(uuid, iconScaled);
+    addCustomIcon(uuid, {iconBytes, name, lastModified});
 }
 
 void Metadata::removeCustomIcon(const QUuid& uuid)
@@ -416,46 +399,38 @@ void Metadata::removeCustomIcon(const QUuid& uuid)
     Q_ASSERT(m_customIcons.contains(uuid));
 
     // Remove hash record only if this is the same uuid
-    QByteArray hash = hashImage(m_customIcons[uuid]);
+    QByteArray hash = hashIcon(m_customIcons[uuid].data);
     if (m_customIconsHashes.contains(hash) && m_customIconsHashes[hash] == uuid) {
         m_customIconsHashes.remove(hash);
     }
 
     m_customIcons.remove(uuid);
-    QPixmapCache::remove(m_customIconCacheKeys.value(uuid));
-    m_customIconCacheKeys.remove(uuid);
-    QPixmapCache::remove(m_customIconScaledCacheKeys.value(uuid));
-    m_customIconScaledCacheKeys.remove(uuid);
     m_customIconsOrder.removeAll(uuid);
     Q_ASSERT(m_customIcons.count() == m_customIconsOrder.count());
-    emit metadataModified();
+    dynamic_cast<Database*>(parent())->addDeletedObject(uuid);
+    emitModified();
 }
 
-QUuid Metadata::findCustomIcon(const QImage& candidate)
+QUuid Metadata::findCustomIcon(const QByteArray& candidate)
 {
-    QByteArray hash = hashImage(candidate);
+    QByteArray hash = hashIcon(candidate);
     return m_customIconsHashes.value(hash, QUuid());
 }
 
 void Metadata::copyCustomIcons(const QSet<QUuid>& iconList, const Metadata* otherMetadata)
 {
     for (const QUuid& uuid : iconList) {
-        Q_ASSERT(otherMetadata->containsCustomIcon(uuid));
+        Q_ASSERT(otherMetadata->hasCustomIcon(uuid));
 
-        if (!containsCustomIcon(uuid) && otherMetadata->containsCustomIcon(uuid)) {
+        if (!hasCustomIcon(uuid) && otherMetadata->hasCustomIcon(uuid)) {
             addCustomIcon(uuid, otherMetadata->customIcon(uuid));
         }
     }
 }
 
-QByteArray Metadata::hashImage(const QImage& image)
+QByteArray Metadata::hashIcon(const QByteArray& iconData)
 {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
-    auto data = QByteArray(reinterpret_cast<const char*>(image.bits()), static_cast<int>(image.sizeInBytes()));
-#else
-    auto data = QByteArray(reinterpret_cast<const char*>(image.bits()), image.byteCount());
-#endif
-    return QCryptographicHash::hash(data, QCryptographicHash::Md5);
+    return QCryptographicHash::hash(iconData, QCryptographicHash::Md5);
 }
 
 void Metadata::setRecycleBinEnabled(bool value)
@@ -495,7 +470,7 @@ void Metadata::setLastTopVisibleGroup(Group* group)
     set(m_lastTopVisibleGroup, group);
 }
 
-void Metadata::setMasterKeyChanged(const QDateTime& value)
+void Metadata::setDatabaseKeyChanged(const QDateTime& value)
 {
     Q_ASSERT(value.timeSpec() == Qt::UTC);
     m_masterKeyChanged = value;
@@ -521,6 +496,12 @@ void Metadata::setHistoryMaxSize(int value)
     set(m_data.historyMaxSize, value);
 }
 
+void Metadata::setAutosaveDelayMin(int value)
+{
+    Q_ASSERT(value >= 0 && value <= 420000000);
+    m_customData->set(customDataKeys::autosaveDelay, QString::number(value));
+}
+
 QDateTime Metadata::settingsChanged() const
 {
     return m_settingsChanged;
@@ -530,4 +511,27 @@ void Metadata::setSettingsChanged(const QDateTime& value)
 {
     Q_ASSERT(value.timeSpec() == Qt::UTC);
     m_settingsChanged = value;
+}
+
+void Metadata::addSavedSearch(const QString& name, const QString& searchtext)
+{
+    auto searches = savedSearches();
+    searches.insert(name, searchtext);
+    auto json = QJsonDocument::fromVariant(searches);
+    m_customData->set(customDataKeys::savedSearch, json.toJson());
+}
+
+void Metadata::deleteSavedSearch(const QString& name)
+{
+    auto searches = savedSearches();
+    searches.remove(name);
+    auto json = QJsonDocument::fromVariant(searches);
+    m_customData->set(customDataKeys::savedSearch, json.toJson());
+}
+
+QVariantMap Metadata::savedSearches()
+{
+    auto searches = m_customData->value(customDataKeys::savedSearch);
+    auto json = QJsonDocument::fromJson(searches.toUtf8());
+    return json.toVariant().toMap();
 }

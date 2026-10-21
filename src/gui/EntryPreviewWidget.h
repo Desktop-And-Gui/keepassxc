@@ -21,12 +21,13 @@
 #include "config-keepassx.h"
 #include "gui/DatabaseWidget.h"
 
-#include <QWidget>
-
 namespace Ui
 {
     class EntryPreviewWidget;
 }
+
+class QTabWidget;
+class QTextEdit;
 
 class EntryPreviewWidget : public QWidget
 {
@@ -40,10 +41,15 @@ public slots:
     void setEntry(Entry* selectedEntry);
     void setGroup(Group* selectedGroup);
     void setDatabaseMode(DatabaseWidget::Mode mode);
+    void refresh();
+    void clear();
 
 signals:
-    void errorOccurred(const QString& error);
     void entryUrlActivated(Entry* entry);
+    void copyTextRequested(const QString& text);
+
+protected:
+    bool eventFilter(QObject* object, QEvent* event) override;
 
 private slots:
     void updateEntryHeaderLine();
@@ -51,32 +57,29 @@ private slots:
     void updateEntryGeneralTab();
     void updateEntryAdvancedTab();
     void updateEntryAutotypeTab();
+    void setUsernameVisible(bool state);
     void setPasswordVisible(bool state);
     void setEntryNotesVisible(bool state);
     void setGroupNotesVisible(bool state);
-    void setNotesVisible(QLabel* notesLabel, const QString& notes, bool state);
+    void setNotesVisible(QTextEdit* notesWidget, const QString& notes, bool state);
 
     void updateGroupHeaderLine();
     void updateGroupGeneralTab();
-#if defined(WITH_XC_KEESHARE)
     void updateGroupSharingTab();
-#endif
 
     void updateTotpLabel();
     void updateTabIndexes();
     void openEntryUrl();
 
 private:
-    void removeTab(QTabWidget* tabWidget, QWidget* widget);
     void setTabEnabled(QTabWidget* tabWidget, QWidget* widget, bool enabled);
 
-    static QPixmap preparePixmap(const QPixmap& pixmap, int size);
     static QString hierarchy(const Group* group, const QString& title);
 
     const QScopedPointer<Ui::EntryPreviewWidget> m_ui;
     bool m_locked;
-    Entry* m_currentEntry;
-    Group* m_currentGroup;
+    QPointer<Entry> m_currentEntry;
+    QPointer<Group> m_currentGroup;
     QTimer m_totpTimer;
     quint8 m_selectedTabEntry;
     quint8 m_selectedTabGroup;

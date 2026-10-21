@@ -1,6 +1,6 @@
 
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,13 +19,10 @@
 #include "DatabaseSettingsWidgetKeeShare.h"
 #include "ui_DatabaseSettingsWidgetKeeShare.h"
 
-#include "core/Database.h"
 #include "core/Group.h"
-#include "core/Metadata.h"
 #include "keeshare/KeeShare.h"
 #include "keeshare/KeeShareSettings.h"
 
-#include <QMessageBox>
 #include <QStandardItemModel>
 
 DatabaseSettingsWidgetKeeShare::DatabaseSettingsWidgetKeeShare(QWidget* parent)
@@ -39,7 +36,7 @@ DatabaseSettingsWidgetKeeShare::~DatabaseSettingsWidgetKeeShare()
 {
 }
 
-void DatabaseSettingsWidgetKeeShare::loadSettings(QSharedPointer<Database> db)
+void DatabaseSettingsWidgetKeeShare::loadSettings(const QSharedPointer<Database>& db)
 {
     m_db = db;
 

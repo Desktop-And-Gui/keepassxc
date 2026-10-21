@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2012 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,11 +21,11 @@
 
 #include "core/Global.h"
 
-#include <QObject>
-#include <QString>
-#include <QUuid>
-
-#include <algorithm>
+#include <QDateTime>
+#include <QFileInfo>
+#include <QList>
+#include <QProcessEnvironment>
+#include <QSet>
 
 class QIODevice;
 class QRegularExpression;
@@ -34,19 +34,56 @@ namespace Tools
 {
     QString debugInfo();
     QString humanReadableFileSize(qint64 bytes, quint32 precision = 2);
+    QString humanReadableTimeDifference(qint64 seconds);
     bool readFromDevice(QIODevice* device, QByteArray& data, int size = 16384);
     bool readAllFromDevice(QIODevice* device, QByteArray& data);
-    QString imageReaderFilter();
     bool isHex(const QByteArray& ba);
     bool isBase64(const QByteArray& ba);
+    bool isAsciiString(const QString& str);
     void sleep(int ms);
     void wait(int ms);
     QString uuidToHex(const QUuid& uuid);
     QUuid hexToUuid(const QString& uuid);
-    QRegularExpression convertToRegex(const QString& string,
-                                      bool useWildcards = false,
-                                      bool exactMatch = false,
-                                      bool caseSensitive = false);
+    bool isValidUuid(const QString& uuidStr);
+    QString envSubstitute(const QString& filepath,
+                          QProcessEnvironment environment = QProcessEnvironment::systemEnvironment());
+    QString cleanFilename(QString filename);
+    QString cleanUsername();
+    QString escapeAccelerators(QString string);
+
+    template <class T> QSet<T> asSet(const QList<T>& a)
+    {
+        return QSet<T>(a.begin(), a.end());
+    }
+
+    /**
+     * Escapes all characters in regex such that they do not receive any special treatment when used
+     * in a regular expression. Essentially, this function escapes any characters not in a-zA-Z0-9.
+     * @param regex The unescaped regular expression string.
+     * @return An escaped string safe to use in a regular expression.
+     */
+    QString escapeRegex(const QString& regex);
+
+    enum RegexConvertOpts
+    {
+        DEFAULT = 0,
+        WILDCARD_UNLIMITED_MATCH = 1,
+        WILDCARD_SINGLE_MATCH = 1 << 2,
+        WILDCARD_LOGICAL_OR = 1 << 3,
+        WILDCARD_ALL = WILDCARD_UNLIMITED_MATCH | WILDCARD_SINGLE_MATCH | WILDCARD_LOGICAL_OR,
+        EXACT_MATCH = 1 << 4,
+        CASE_SENSITIVE = 1 << 5,
+        ESCAPE_REGEX = 1 << 6,
+    };
+
+    /**
+     * Converts input string to a regular expression according to the options specified in opts.
+     * Note that, unless ESCAPE_REGEX is set, convertToRegex assumes a proper regular expression as input.
+     * @param string The input string. Assumed to be a proper regular expression unless ESCAPE_REGEX is set.
+     * @param opts Tools::RegexConvertOpts options the regex will be converted with.
+     * @return The regular expression built from string and opts.
+     */
+    QRegularExpression convertToRegex(const QString& string, int opts = RegexConvertOpts::DEFAULT);
 
     template <typename RandomAccessIterator, typename T>
     RandomAccessIterator binaryFind(RandomAccessIterator begin, RandomAccessIterator end, const T& value)
@@ -60,47 +97,37 @@ namespace Tools
         }
     }
 
-    template <typename Key, typename Value, void deleter(Value)> struct Map
+    // Checks if all values are found inside the list. Returns a list of values not found.
+    template <typename T> QList<T> getMissingValuesFromList(const QList<T>& list, const QList<T>& required)
     {
-        QMap<Key, Value> values;
-        Value& operator[](const Key index)
-        {
-            return values[index];
-        }
-
-        ~Map()
-        {
-            for (Value m : values) {
-                deleter(m);
+        QList<T> missingValues;
+        for (const auto& r : required) {
+            if (!list.contains(r)) {
+                missingValues << r;
             }
         }
-    };
 
-    struct Buffer
-    {
-        unsigned char* raw;
-        size_t size;
-
-        Buffer();
-        ~Buffer();
-
-        void clear();
-        QByteArray content() const;
-    };
-
-    inline int qtRuntimeVersion()
-    {
-        // Cache the result since the Qt version can't change during
-        // the execution, computing it once will be enough
-        const static int version = []() {
-            const auto sq = QString::fromLatin1(qVersion());
-            return (sq.section(QChar::fromLatin1('.'), 0, 0).toInt() << 16)
-                   + (sq.section(QChar::fromLatin1('.'), 1, 1).toInt() << 8)
-                   + (sq.section(QChar::fromLatin1('.'), 2, 2).toInt());
-        }();
-
-        return version;
+        return missingValues;
     }
+
+    QVariantMap qo2qvm(const QObject* object, const QStringList& ignoredProperties = {"objectName"});
+
+    QString substituteBackupFilePath(QString pattern, const QString& databasePath);
+
+    enum class MimeType : uint8_t
+    {
+        Image,
+        PlainText,
+        Html,
+        Markdown,
+        Unknown
+    };
+
+    MimeType toMimeType(const QString& mimeName);
+    MimeType getMimeType(const QByteArray& data);
+    MimeType getMimeType(const QFileInfo& fileInfo);
+    bool isTextMimeType(MimeType mimeType);
+
 } // namespace Tools
 
 #endif // KEEPASSX_TOOLS_H

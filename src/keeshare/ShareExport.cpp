@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2019 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,18 +14,27 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
 #include "ShareExport.h"
-#include "config-keepassx.h"
+#include "core/EntryPlaceholders.h"
 #include "core/Group.h"
 #include "core/Metadata.h"
+#include "crypto/Random.h"
 #include "format/KeePass2Writer.h"
+#include "gui/Icons.h"
+#include "gui/MessageBox.h"
 #include "keeshare/KeeShare.h"
-#include "keeshare/Signature.h"
 #include "keys/PasswordKey.h"
 
-#if defined(WITH_XC_KEESHARE_SECURE)
-#include <quazip.h>
-#include <quazipfile.h>
+#include <../minizip/zip.h>
+#include <QBuffer>
+#include <botan/pubkey.h>
+
+// Compatibility with minizip-ng
+#ifdef MZ_VERSION_BUILD
+#undef Z_BEST_COMPRESSION
+#define Z_BEST_COMPRESSION MZ_COMPRESS_LEVEL_BEST
+#define zipOpenNewFileInZip64 zipOpenNewFileInZip_64
 #endif
 
 namespace
@@ -34,8 +43,8 @@ namespace
     {
         for (const auto& attribute : EntryAttributes::DefaultAttributes) {
             const auto standardValue = targetEntry->attributes()->value(attribute);
-            const auto type = targetEntry->placeholderType(standardValue);
-            if (type != Entry::PlaceholderType::Reference) {
+            const auto type = EntryPlaceholders::placeholderType(standardValue);
+            if (type != EntryPlaceholders::PlaceholderType::Reference) {
                 // No reference to resolve
                 continue;
             }
@@ -45,12 +54,45 @@ namespace
                 continue;
             }
             // We could do more sophisticated **** trying to point the reference to the next in-scope reference
-            // but those cases with high propability constructed examples and very rare in real usage
+            // but those cases with high probability constructed examples and very rare in real usage
             const auto* sourceReference = sourceDb->rootGroup()->findEntryByUuid(targetEntry->uuid());
             const auto resolvedValue = sourceReference->resolveMultiplePlaceholders(standardValue);
-            targetEntry->setUpdateTimeinfo(false);
+            targetEntry->beginUpdate();
             targetEntry->attributes()->set(attribute, resolvedValue, targetEntry->attributes()->isProtected(attribute));
-            targetEntry->setUpdateTimeinfo(true);
+            targetEntry->endUpdate();
+        }
+    }
+
+    void cloneIcon(Metadata* targetMetadata, const Database* sourceDb, const QUuid& iconUuid)
+    {
+        if (!iconUuid.isNull() && !targetMetadata->hasCustomIcon(iconUuid)) {
+            targetMetadata->addCustomIcon(iconUuid, sourceDb->metadata()->customIcon(iconUuid));
+        }
+    }
+
+    void cloneEntries(Metadata* targetMetadata, const Group* sourceGroup, Group* targetGroup)
+    {
+        for (const Entry* sourceEntry : sourceGroup->entries()) {
+            auto* targetEntry = sourceEntry->clone(Entry::CloneIncludeHistory);
+            const bool updateTimeinfoEntry = targetEntry->canUpdateTimeinfo();
+            targetEntry->setUpdateTimeinfo(false);
+            targetEntry->setGroup(targetGroup);
+            targetEntry->setUpdateTimeinfo(updateTimeinfoEntry);
+            cloneIcon(targetMetadata, sourceEntry->database(), targetEntry->iconUuid());
+        }
+    }
+
+    void cloneChildren(Metadata* targetMetadata, const Group* sourceRoot, Group* targetRoot)
+    {
+        for (const Group* sourceGroup : sourceRoot->children()) {
+            auto* targetGroup = sourceGroup->clone(Entry::CloneNoFlags, Group::CloneNoFlags);
+            const bool updateTimeinfo = targetGroup->canUpdateTimeinfo();
+            targetGroup->setUpdateTimeinfo(false);
+            targetGroup->setParent(targetRoot);
+            targetGroup->setUpdateTimeinfo(updateTimeinfo);
+            cloneIcon(targetMetadata, sourceRoot->database(), targetGroup->iconUuid());
+            cloneEntries(targetMetadata, sourceGroup, targetGroup);
+            cloneChildren(targetMetadata, sourceGroup, targetGroup);
         }
     }
 
@@ -60,8 +102,6 @@ namespace
         auto* targetDb = new Database();
         auto* targetMetadata = targetDb->metadata();
         targetMetadata->setRecycleBinEnabled(false);
-        auto key = QSharedPointer<CompositeKey>::create();
-        key->addKey(QSharedPointer<PasswordKey>::create(reference.password));
 
         // Copy the source root as the root of the export database, memory manage the old root node
         auto* targetRoot = sourceRoot->clone(Entry::CloneNoFlags, Group::CloneNoFlags);
@@ -69,22 +109,17 @@ namespace
         targetRoot->setUpdateTimeinfo(false);
         KeeShare::setReferenceTo(targetRoot, KeeShareSettings::Reference());
         targetRoot->setUpdateTimeinfo(updateTimeinfo);
-        const auto sourceEntries = sourceRoot->entriesRecursive(false);
-        for (const Entry* sourceEntry : sourceEntries) {
-            auto* targetEntry = sourceEntry->clone(Entry::CloneIncludeHistory);
-            const bool updateTimeinfo = targetEntry->canUpdateTimeinfo();
-            targetEntry->setUpdateTimeinfo(false);
-            targetEntry->setGroup(targetRoot);
-            targetEntry->setUpdateTimeinfo(updateTimeinfo);
-            const auto iconUuid = targetEntry->iconUuid();
-            if (!iconUuid.isNull() && !targetMetadata->containsCustomIcon(iconUuid)) {
-                targetMetadata->addCustomIcon(iconUuid, sourceEntry->icon());
-            }
+        cloneIcon(targetMetadata, sourceRoot->database(), targetRoot->iconUuid());
+        cloneEntries(targetMetadata, sourceRoot, targetRoot);
+        if (reference.keepGroups) {
+            cloneChildren(targetMetadata, sourceRoot, targetRoot);
         }
 
+        auto key = QSharedPointer<CompositeKey>::create();
+        key->addKey(QSharedPointer<PasswordKey>::create(reference.password));
         targetDb->setKey(key);
-        auto* obsoleteRoot = targetDb->rootGroup();
-        targetDb->setRootGroup(targetRoot);
+
+        auto obsoleteRoot = targetDb->setRootGroup(targetRoot);
         delete obsoleteRoot;
 
         targetDb->metadata()->setName(sourceRoot->name());
@@ -104,115 +139,49 @@ namespace
         return targetDb;
     }
 
-    ShareObserver::Result
-    intoSignedContainer(const QString& resolvedPath, const KeeShareSettings::Reference& reference, Database* targetDb)
+    bool writeZipFile(void* zf, const QString& fileName, const QByteArray& data)
     {
-#if !defined(WITH_XC_KEESHARE_SECURE)
-        Q_UNUSED(targetDb);
-        Q_UNUSED(resolvedPath);
-        return {reference.path,
-                ShareObserver::Result::Warning,
-                ShareExport::tr("Overwriting signed share container is not supported - export prevented")};
-#else
-        QByteArray bytes;
-        {
-            QBuffer buffer(&bytes);
-            buffer.open(QIODevice::WriteOnly);
-            KeePass2Writer writer;
-            writer.writeDatabase(&buffer, targetDb);
-            if (writer.hasError()) {
-                qWarning("Serializing export dabase failed: %s.", writer.errorString().toLatin1().data());
-                return {reference.path, ShareObserver::Result::Error, writer.errorString()};
-            }
-        }
-        const auto own = KeeShare::own();
-        QuaZip zip(resolvedPath);
-        zip.setFileNameCodec("UTF-8");
-        const bool zipOpened = zip.open(QuaZip::mdCreate);
-        if (!zipOpened) {
-            ::qWarning("Opening export file failed: %d", zip.getZipError());
-            return {reference.path,
-                    ShareObserver::Result::Error,
-                    ShareExport::tr("Could not write export container (%1)").arg(zip.getZipError())};
-        }
-        {
-            QuaZipFile file(&zip);
-            const auto signatureOpened = file.open(QIODevice::WriteOnly, QuaZipNewInfo(KeeShare::signatureFileName()));
-            if (!signatureOpened) {
-                ::qWarning("Embedding signature failed: Could not open file to write (%d)", zip.getZipError());
-                return {reference.path,
-                        ShareObserver::Result::Error,
-                        ShareExport::tr("Could not embed signature: Could not open file to write (%1)")
-                            .arg(file.getZipError())};
-            }
-            QTextStream stream(&file);
-            KeeShareSettings::Sign sign;
-            auto sshKey = own.key.sshKey();
-            sshKey.openKey(QString());
-            sign.signature = Signature::create(bytes, sshKey);
-            sign.certificate = own.certificate;
-            stream << KeeShareSettings::Sign::serialize(sign);
-            stream.flush();
-            if (file.getZipError() != ZIP_OK) {
-                ::qWarning("Embedding signature failed: Could not write file (%d)", zip.getZipError());
-                return {
-                    reference.path,
-                    ShareObserver::Result::Error,
-                    ShareExport::tr("Could not embed signature: Could not write file (%1)").arg(file.getZipError())};
-            }
-            file.close();
-        }
-        {
-            QuaZipFile file(&zip);
-            const auto dbOpened = file.open(QIODevice::WriteOnly, QuaZipNewInfo(KeeShare::containerFileName()));
-            if (!dbOpened) {
-                ::qWarning("Embedding database failed: Could not open file to write (%d)", zip.getZipError());
-                return {reference.path,
-                        ShareObserver::Result::Error,
-                        ShareExport::tr("Could not embed database: Could not open file to write (%1)")
-                            .arg(file.getZipError())};
-            }
-            file.write(bytes);
-            if (file.getZipError() != ZIP_OK) {
-                ::qWarning("Embedding database failed: Could not write file (%d)", zip.getZipError());
-                return {reference.path,
-                        ShareObserver::Result::Error,
-                        ShareExport::tr("Could not embed database: Could not write file (%1)").arg(file.getZipError())};
-            }
-            file.close();
-        }
-        zip.close();
-        return {reference.path};
-#endif
+        zipOpenNewFileInZip64(zf,
+                              fileName.toLatin1().data(),
+                              nullptr,
+                              nullptr,
+                              0,
+                              nullptr,
+                              0,
+                              nullptr,
+                              Z_DEFLATED,
+                              Z_BEST_COMPRESSION,
+                              1);
+        int pos = 0;
+        do {
+            auto len = qMin(data.size() - pos, 8192);
+            zipWriteInFileInZip(zf, data.data() + pos, len);
+            pos += len;
+        } while (pos < data.size());
+
+        zipCloseFileInZip(zf);
+        return true;
     }
 
-    ShareObserver::Result
-    intoUnsignedContainer(const QString& resolvedPath, const KeeShareSettings::Reference& reference, Database* targetDb)
+    bool signData(const QByteArray& data, const KeeShareSettings::Key& key, QString& signature)
     {
-#if !defined(WITH_XC_KEESHARE_INSECURE)
-        Q_UNUSED(targetDb);
-        Q_UNUSED(resolvedPath);
-        return {reference.path,
-                ShareObserver::Result::Warning,
-                ShareExport::tr("Overwriting unsigned share container is not supported - export prevented")};
-#else
-        QFile file(resolvedPath);
-        const bool fileOpened = file.open(QIODevice::WriteOnly);
-        if (!fileOpened) {
-            ::qWarning("Opening export file failed");
-            return {reference.path, ShareObserver::Result::Error, ShareExport::tr("Could not write export container")};
-        }
-        KeePass2Writer writer;
-        writer.writeDatabase(&file, targetDb);
-        if (writer.hasError()) {
-            qWarning("Exporting dabase failed: %s.", writer.errorString().toLatin1().data());
-            return {reference.path, ShareObserver::Result::Error, writer.errorString()};
-        }
-        file.close();
-#endif
-        return {reference.path};
-    }
+        if (key.key->algo_name() == "RSA") {
+            try {
+                Botan::PK_Signer signer(*key.key, *randomGen()->getRng(), "EMSA3(SHA-256)");
+                signer.update(reinterpret_cast<const uint8_t*>(data.constData()), data.size());
+                auto s = signer.signature(*randomGen()->getRng());
 
+                auto hex = QByteArray(reinterpret_cast<char*>(s.data()), s.size()).toHex();
+                signature = QString("rsa|%1").arg(QString::fromLatin1(hex));
+                return true;
+            } catch (std::exception& e) {
+                qWarning("KeeShare: Failed to sign data: %s", e.what());
+                return false;
+            }
+        }
+        qWarning("Unsupported Public/Private key format");
+        return false;
+    }
 } // namespace
 
 ShareObserver::Result ShareExport::intoContainer(const QString& resolvedPath,
@@ -220,13 +189,49 @@ ShareObserver::Result ShareExport::intoContainer(const QString& resolvedPath,
                                                  const Group* group)
 {
     QScopedPointer<Database> targetDb(extractIntoDatabase(reference, group));
-    const QFileInfo info(resolvedPath);
-    if (KeeShare::isContainerType(info, KeeShare::signedContainerFileType())) {
-        return intoSignedContainer(resolvedPath, reference, targetDb.data());
+    if (resolvedPath.endsWith(".kdbx.share")) {
+        // Write database to memory and sign it
+        QByteArray dbData, signatureData;
+        QBuffer buffer;
+
+        buffer.setBuffer(&dbData);
+        buffer.open(QIODevice::WriteOnly);
+
+        KeePass2Writer writer;
+        if (!writer.writeDatabase(&buffer, targetDb.data())) {
+            qWarning("Serializing export database failed: %s.", writer.errorString().toLatin1().data());
+            return {reference.path, ShareObserver::Result::Error, writer.errorString()};
+        }
+
+        buffer.close();
+
+        // Get Own Certificate for signing
+        const auto own = KeeShare::own();
+        Q_ASSERT(!own.isNull());
+
+        // Sign the database data
+        KeeShareSettings::Sign sign;
+        sign.certificate = own.certificate;
+        signData(dbData, own.key, sign.signature);
+
+        signatureData = KeeShareSettings::Sign::serialize(sign).toLatin1();
+
+        auto zf = zipOpen64(resolvedPath.toLatin1().data(), 0);
+        if (!zf) {
+            return {reference.path, ShareObserver::Result::Error, ShareExport::tr("Could not write export container.")};
+        }
+
+        writeZipFile(zf, KeeShare::signatureFileName().toLatin1().data(), signatureData);
+        writeZipFile(zf, KeeShare::containerFileName().toLatin1().data(), dbData);
+
+        zipClose(zf, nullptr);
+    } else {
+        QString error;
+        if (!targetDb->saveAs(resolvedPath, Database::Atomic, {}, &error)) {
+            qWarning("Exporting database failed: %s.", error.toLatin1().data());
+            return {resolvedPath, ShareObserver::Result::Error, error};
+        }
     }
-    if (KeeShare::isContainerType(info, KeeShare::unsignedContainerFileType())) {
-        return intoUnsignedContainer(resolvedPath, reference, targetDb.data());
-    }
-    Q_ASSERT(false);
-    return {reference.path, ShareObserver::Result::Error, tr("Unexpected export error occurred")};
+
+    return {resolvedPath};
 }

@@ -18,24 +18,24 @@
 #ifndef KEEPASSXC_TESTCLI_H
 #define KEEPASSXC_TESTCLI_H
 
-#include "core/Database.h"
+#include <QBuffer>
+
 #include "util/TemporaryFile.h"
 
-#include <QByteArray>
-#include <QFile>
-#include <QScopedPointer>
-#include <QSharedPointer>
-#include <QTemporaryFile>
-#include <QTest>
-
-#include <stdio.h>
+class Command;
+class Database;
 
 class TestCli : public QObject
 {
     Q_OBJECT
 
 private:
-    QSharedPointer<Database> readTestDatabase() const;
+    QSharedPointer<Database>
+    readDatabase(const QString& filename = {}, const QString& pw = {}, const QString& keyfile = {});
+    int execCmd(Command& cmd, const QStringList& args) const;
+    bool isTotp(const QString& value);
+    void setInput(const QString& input);
+    void setInput(const QStringList& input);
 
 private slots:
     void initTestCase();
@@ -47,10 +47,14 @@ private slots:
     void testAdd();
     void testAddGroup();
     void testAnalyze();
+    void testAttachmentExport();
+    void testAttachmentImport();
+    void testAttachmentRemove();
     void testClip();
     void testCommandParsing_data();
     void testCommandParsing();
     void testCreate();
+    void testDatabaseEdit();
     void testDiceware();
     void testEdit();
     void testEstimate_data();
@@ -59,38 +63,41 @@ private slots:
     void testGenerate_data();
     void testGenerate();
     void testImport();
+    void testInfo();
     void testKeyFileOption();
     void testNoPasswordOption();
     void testHelp();
     void testInteractiveCommands();
     void testList();
-    void testLocate();
     void testMerge();
+    void testMergeWithKeys();
     void testMove();
     void testOpen();
     void testRemove();
     void testRemoveGroup();
     void testRemoveQuiet();
+    void testSearch();
     void testShow();
     void testInvalidDbFiles();
     void testYubiKeyOption();
+    void testNonAscii();
+    void testTextStream();
+    void testTextStream_data();
 
 private:
-    QByteArray m_dbData;
-    QByteArray m_dbData2;
-    QByteArray m_xmlData;
-    QByteArray m_yubiKeyProtectedDbData;
-    QByteArray m_keyFileProtectedDbData;
-    QByteArray m_keyFileProtectedNoPasswordDbData;
+    QScopedPointer<QFile> m_devNull;
     QScopedPointer<TemporaryFile> m_dbFile;
     QScopedPointer<TemporaryFile> m_dbFile2;
+    QScopedPointer<TemporaryFile> m_dbFileMulti;
     QScopedPointer<TemporaryFile> m_xmlFile;
     QScopedPointer<TemporaryFile> m_keyFileProtectedDbFile;
     QScopedPointer<TemporaryFile> m_keyFileProtectedNoPasswordDbFile;
     QScopedPointer<TemporaryFile> m_yubiKeyProtectedDbFile;
-    QScopedPointer<TemporaryFile> m_stdoutFile;
-    QScopedPointer<TemporaryFile> m_stderrFile;
-    QScopedPointer<TemporaryFile> m_stdinFile;
+    QScopedPointer<TemporaryFile> m_nonAsciiDbFile;
+
+    QScopedPointer<QBuffer> m_stdout;
+    QScopedPointer<QBuffer> m_stderr;
+    QScopedPointer<QBuffer> m_stdin;
 };
 
 #endif // KEEPASSXC_TESTCLI_H

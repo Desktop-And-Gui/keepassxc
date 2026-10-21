@@ -21,7 +21,6 @@
 #include "KdbxWriter.h"
 
 #include <QCoreApplication>
-#include <QScopedPointer>
 
 class QIODevice;
 class Database;
@@ -34,6 +33,7 @@ public:
     bool writeDatabase(const QString& filename, Database* db);
     bool writeDatabase(QIODevice* device, Database* db);
     void extractDatabase(Database* db, QByteArray& xmlOutput);
+    static quint32 kdbxVersionRequired(Database const* db, bool ignoreCurrent = false, bool ignoreKdf = false);
 
     QSharedPointer<KdbxWriter> writer() const;
     quint32 version() const;
@@ -43,7 +43,6 @@ public:
 
 private:
     void raiseError(const QString& errorMessage);
-    bool implicitUpgradeNeeded(Database const* db) const;
 
     bool m_error = false;
     QString m_errorStr = "";

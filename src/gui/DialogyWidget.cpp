@@ -17,13 +17,13 @@
 
 #include "DialogyWidget.h"
 
-#include <QDialogButtonBox>
 #include <QKeyEvent>
 #include <QPushButton>
 
 DialogyWidget::DialogyWidget(QWidget* parent)
     : QWidget(parent)
 {
+    setAutoFillBackground(true);
 }
 
 void DialogyWidget::keyPressEvent(QKeyEvent* e)

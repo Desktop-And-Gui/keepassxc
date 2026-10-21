@@ -15,11 +15,10 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef KEEPASSX_QRCODE_H
-#define KEEPASSX_QRCODE_H
+#ifndef KEEPASSXC_QRCODE_H
+#define KEEPASSXC_QRCODE_H
 
 #include <QScopedPointer>
-#include <QtCore/qglobal.h>
 
 class QImage;
 class QIODevice;
@@ -75,4 +74,4 @@ private:
     QScopedPointer<QrCodePrivate> d_ptr;
 };
 
-#endif // KEEPASSX_QRCODE_H
+#endif // KEEPASSXC_QRCODE_H

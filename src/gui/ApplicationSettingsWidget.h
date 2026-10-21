@@ -19,6 +19,10 @@
 #ifndef KEEPASSX_SETTINGSWIDGET_H
 #define KEEPASSX_SETTINGSWIDGET_H
 
+#include <QMap>
+#include <QSet>
+
+#include "core/Config.h"
 #include "gui/EditWidget.h"
 
 namespace Ui
@@ -30,9 +34,7 @@ namespace Ui
 class ISettingsPage
 {
 public:
-    virtual ~ISettingsPage()
-    {
-    }
+    virtual ~ISettingsPage() = default;
     virtual QString name() = 0;
     virtual QIcon icon() = 0;
     virtual QWidget* createWidget() = 0;
@@ -46,7 +48,7 @@ class ApplicationSettingsWidget : public EditWidget
 
 public:
     explicit ApplicationSettingsWidget(QWidget* parent = nullptr);
-    ~ApplicationSettingsWidget();
+    ~ApplicationSettingsWidget() override;
     void addSettingsPage(ISettingsPage* page);
     void loadSettings();
 
@@ -56,19 +58,26 @@ signals:
 private slots:
     void saveSettings();
     void resetSettings();
+    void importSettings();
+    void exportSettings();
     void reject();
     void autoSaveToggled(bool checked);
+    void minimizeAfterUnlockCheckBoxToggled(bool checked);
     void hideWindowOnCopyCheckBoxToggled(bool checked);
     void systrayToggled(bool checked);
-    void toolbarSettingsToggled(bool checked);
     void rememberDatabasesToggled(bool checked);
     void checkUpdatesToggled(bool checked);
+    void showExpiredEntriesOnDatabaseUnlockToggled(bool checked);
+    void autoTypeAskToggled(bool checked);
+    void selectBackupDirectory();
 
 private:
     QWidget* const m_secWidget;
     QWidget* const m_generalWidget;
     const QScopedPointer<Ui::ApplicationSettingsWidgetSecurity> m_secUi;
     const QScopedPointer<Ui::ApplicationSettingsWidgetGeneral> m_generalUi;
+    QMap<Config::ConfigKey, QWidget*> m_configWidgetMap;
+    QSet<Config::ConfigKey> m_configValueInverted;
     Qt::Key m_globalAutoTypeKey;
     Qt::KeyboardModifiers m_globalAutoTypeModifiers;
     class ExtraPage;

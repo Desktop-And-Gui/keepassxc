@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ * Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,14 +15,17 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef KEEPASSX_DATABASETABWIDGET_H
-#define KEEPASSX_DATABASETABWIDGET_H
+#ifndef KEEPASSXC_DATABASETABWIDGET_H
+#define KEEPASSXC_DATABASETABWIDGET_H
 
 #include "DatabaseOpenDialog.h"
+#include "config-keepassx.h"
 #include "gui/MessageWidget.h"
+#include "wizard/ImportWizard.h"
 
-#include <QPointer>
+#include <QSet>
 #include <QTabWidget>
+#include <QTimer>
 
 class Database;
 class DatabaseWidget;
@@ -42,12 +45,12 @@ public:
     DatabaseWidget* currentDatabaseWidget();
     DatabaseWidget* databaseWidgetFromIndex(int index) const;
 
-    bool isReadOnly(int index = -1) const;
     bool canSave(int index = -1) const;
     bool isModified(int index = -1) const;
     bool hasLockableDatabases() const;
 
 public slots:
+    void lockAndSwitchToFirstUnlockedDatabase(int index = -1);
     void addDatabaseTab(const QString& filePath,
                         bool inBackground = false,
                         const QString& password = {},
@@ -63,47 +66,69 @@ public slots:
     DatabaseWidget* newDatabase();
     void openDatabase();
     void mergeDatabase();
-    void importCsv();
-    void importKeePass1Database();
-    void importOpVaultDatabase();
+    void importFile();
     bool saveDatabase(int index = -1);
     bool saveDatabaseAs(int index = -1);
+    bool saveDatabaseBackup(int index = -1);
     void exportToCsv();
     void exportToHtml();
+    void exportToXML();
 
-    void lockDatabases();
+    bool lockDatabases();
+    void lockDatabasesDelayed();
+    void lockDatabasesOnUserSwitch();
     void closeDatabaseFromSender();
     void unlockDatabaseInDialog(DatabaseWidget* dbWidget, DatabaseOpenDialog::Intent intent);
     void unlockDatabaseInDialog(DatabaseWidget* dbWidget, DatabaseOpenDialog::Intent intent, const QString& filePath);
+    void unlockDatabaseInDialogForSync(const QString& filePath);
+    void unlockAnyDatabaseInDialog(DatabaseOpenDialog::Intent intent);
     void relockPendingDatabase();
 
-    void changeMasterKey();
-    void changeDatabaseSettings();
-    void performGlobalAutoType();
+    void showDatabaseReports(bool state);
+    void showDatabaseSettings(bool state);
+    void showDatabaseSecurity();
+#ifdef KPXC_FEATURE_BROWSER
+    void showPasskeys();
+    void importPasskey();
+    void importPasskeyToEntry();
+    void removePasskeyFromEntry();
+#endif
+    void performGlobalAutoType(const QString& search);
+    void performBrowserUnlock();
 
 signals:
     void databaseOpened(DatabaseWidget* dbWidget);
     void databaseClosed(const QString& filePath);
     void databaseUnlocked(DatabaseWidget* dbWidget);
     void databaseLocked(DatabaseWidget* dbWidget);
-    void activateDatabaseChanged(DatabaseWidget* dbWidget);
+    void activeDatabaseChanged(DatabaseWidget* dbWidget);
     void tabNameChanged();
+    void tabVisibilityChanged(bool tabsVisible);
     void messageGlobal(const QString&, MessageWidget::MessageType type);
     void messageDismissGlobal();
+    void databaseUnlockDialogFinished(bool accepted, DatabaseWidget* dbWidget);
 
 private slots:
     void toggleTabbar();
-    void emitActivateDatabaseChanged();
+    void emitActiveDatabaseChanged();
     void emitDatabaseLockChanged();
+    void handleDatabaseUnlockDialogFinished(bool accepted, DatabaseWidget* dbWidget);
+    void handleExportError(const QString& reason);
+    void updateLastDatabases();
 
 private:
     QSharedPointer<Database> execNewDatabaseWizard();
-    void updateLastDatabases(const QString& filename);
+    void updateLastDatabases(const QSharedPointer<Database>& database);
     bool warnOnExport();
+    void displayUnlockDialog();
 
     QPointer<DatabaseWidgetStateSync> m_dbWidgetStateSync;
     QPointer<DatabaseWidget> m_dbWidgetPendingLock;
-    QScopedPointer<DatabaseOpenDialog> m_databaseOpenDialog;
+    QPointer<DatabaseOpenDialog> m_databaseOpenDialog;
+    QPointer<ImportWizard> m_importWizard;
+    QTimer m_lockDelayTimer;
+    bool m_databaseOpenInProgress;
+    QSet<DatabaseWidget*> m_widgetsPendingClose;
 };
 
-#endif // KEEPASSX_DATABASETABWIDGET_H
+#endif // KEEPASSXC_DATABASETABWIDGET_H

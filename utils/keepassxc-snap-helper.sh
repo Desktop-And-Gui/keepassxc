@@ -18,88 +18,85 @@
 
 set -e
 
-DEBUG=false
-
-JSON_BASE=$(cat << EOF
-{
-    "name": "org.keepassxc.keepassxc_browser",
-    "description": "KeePassXC integration with native messaging support",
-    "path": "/snap/bin/keepassxc.proxy",
-    "type": "stdio",
-    __EXT__
-}
-EOF
-)
-
-JSON_FIREFOX=$(cat << EOF
-"allowed_extensions": [
-        "keepassxc-browser@keepassxc.org"
-    ]
-EOF
-)
-
-JSON_CHROME=$(cat << EOF
-"allowed_origins": [
-        "chrome-extension://iopaggbpplllidnfmcghoonnokmjoicf/",
-        "chrome-extension://oboonakemofpalcgghocfoadofidjkkk/"
-    ]
-EOF
-)
-
 JSON_OUT=""
 BASE_DIR="."
 INSTALL_DIR=""
 INSTALL_FILE="org.keepassxc.keepassxc_browser.json"
 
-buildJson() {
-    if [[ ! -z $1 ]]; then
-        # Insert Firefox data
-        JSON_OUT="${JSON_BASE/__EXT__/$JSON_FIREFOX}"
-    else
-        # Insert Chrome data
-        JSON_OUT="${JSON_BASE/__EXT__/$JSON_CHROME}"
-    fi
-}
+# Early out if the keepassxc.proxy executable cannot be found
+if ! command -v keepassxc.proxy; then
+    echo "Could not find keepassxc.proxy! Ensure the keepassxc snap is installed properly."
+    exit 0
+fi
 
-askBrowserSnap() {
-    if (whiptail --title "Snap Choice" --defaultno \
-            --yesno "Is this browser installed as a snap (usually NO)?" 8 60); then
-        # BASE_DIR="$1"
-        whiptail --title "Snap Choice" --msgbox "Sorry, browsers installed as snaps are not supported at this time" 8 50
-        exit 0
-    fi
+PROXY_PATH=$(command -v keepassxc.proxy)
+
+JSON_FIREFOX=$(cat << EOF
+{
+    "name": "org.keepassxc.keepassxc_browser",
+    "description": "KeePassXC integration with native messaging support",
+    "path": "${PROXY_PATH}",
+    "type": "stdio",
+    "allowed_extensions": [
+        "keepassxc-browser@keepassxc.org"
+    ]
 }
+EOF
+)
+
+JSON_CHROME=$(cat << EOF
+{
+    "name": "org.keepassxc.keepassxc_browser",
+    "description": "KeePassXC integration with native messaging support",
+    "path": "${PROXY_PATH}",
+    "type": "stdio",
+    "allowed_origins": [
+        "chrome-extension://iopaggbpplllidnfmcghoonnokmjoicf/",
+        "chrome-extension://oboonakemofpalcgghocfoadofidjkkk/",
+        "chrome-extension://pdffhmdngciaglkoonimfcmckehcpafo/"
+    ]
+}
+EOF
+)
 
 setupFirefox() {
-    askBrowserSnap "./snap/firefox/common"
-    buildJson "firefox"
+    JSON_OUT=${JSON_FIREFOX}
     INSTALL_DIR="${BASE_DIR}/.mozilla/native-messaging-hosts"
 }
 
 setupChrome() {
-    buildJson
+    JSON_OUT=${JSON_CHROME}
     INSTALL_DIR="${BASE_DIR}/.config/google-chrome/NativeMessagingHosts"
 }
 
 setupChromium() {
-    askBrowserSnap "./snap/chromium/current"
-    buildJson
+    JSON_OUT=${JSON_CHROME}
     INSTALL_DIR="${BASE_DIR}/.config/chromium/NativeMessagingHosts"
 }
 
 setupVivaldi() {
-    buildJson
+    JSON_OUT=${JSON_CHROME}
     INSTALL_DIR="${BASE_DIR}/.config/vivaldi/NativeMessagingHosts"
 }
 
 setupBrave() {
-    buildJson
+    JSON_OUT=${JSON_CHROME}
     INSTALL_DIR="${BASE_DIR}/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts"
 }
 
 setupTorBrowser() {
-    buildJson "firefox"
+    JSON_OUT=${JSON_FIREFOX}
     INSTALL_DIR="${BASE_DIR}/.tor-browser/app/Browser/TorBrowser/Data/Browser/.mozilla/native-messaging-hosts"
+}
+
+setupEdge() {
+    JSON_OUT=${JSON_CHROME}
+    INSTALL_DIR="${BASE_DIR}/.config/microsoft-edge/NativeMessagingHosts"
+}
+
+setupLibreWolf() {
+    JSON_OUT=${JSON_FIREFOX}
+    INSTALL_DIR="${BASE_DIR}/.librewolf/native-messaging-hosts"
 }
 
 # --------------------------------
@@ -116,28 +113,31 @@ BROWSER=$(whiptail \
             "4" "Vivaldi" \
             "5" "Brave" \
             "6" "Tor Browser" \
+            "7" "Microsoft Edge" \
+            "8" "LibreWolf" \
             3>&1 1>&2 2>&3)
+
+exitstatus=$?
 
 clear
 
-exitstatus=$?
-if [ $exitstatus = 0 ]; then
+if [[ $exitstatus == 0 ]]; then
     # Configure settings for the chosen browser
-    case "$BROWSER" in
+    case $BROWSER in
         1) setupFirefox ;;
         2) setupChrome ;;
         3) setupChromium ;;
         4) setupVivaldi ;;
         5) setupBrave ;;
         6) setupTorBrowser ;;
+        7) setupEdge ;;
+        8) setupLibreWolf ;;
     esac
 
     # Install the JSON file
     cd ~
     mkdir -p "$INSTALL_DIR"
-    echo "$JSON_OUT" > ${INSTALL_DIR}/${INSTALL_FILE}
-
-    $DEBUG && echo "Installed to: ${INSTALL_DIR}/${INSTALL_FILE}"
+    echo "$JSON_OUT" > "${INSTALL_DIR}/${INSTALL_FILE}"
 
     whiptail \
         --title "Installation Complete" \

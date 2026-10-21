@@ -18,7 +18,6 @@
 #ifndef KEEPASSXC_ASYNCTASK_HPP
 #define KEEPASSXC_ASYNCTASK_HPP
 
-#include <QFuture>
 #include <QFutureWatcher>
 #include <QtConcurrent>
 
@@ -34,12 +33,10 @@ namespace AsyncTask
      * @param future future to wait for
      * @return async task result
      */
-    template <typename FunctionObject>
-    typename std::result_of<FunctionObject()>::type
-    waitForFuture(QFuture<typename std::result_of<FunctionObject()>::type> future)
+    template <typename T> T waitForFuture(QFuture<T> future)
     {
         QEventLoop loop;
-        QFutureWatcher<typename std::result_of<FunctionObject()>::type> watcher;
+        QFutureWatcher<T> watcher;
         QObject::connect(&watcher, SIGNAL(finished()), &loop, SLOT(quit()));
         watcher.setFuture(future);
         loop.exec();
@@ -52,10 +49,30 @@ namespace AsyncTask
      * @param task std::function object to run
      * @return async task result
      */
-    template <typename FunctionObject>
-    typename std::result_of<FunctionObject()>::type runAndWaitForFuture(FunctionObject task)
+    template <typename FunctionObject> decltype(auto) runAndWaitForFuture(FunctionObject task)
     {
-        return waitForFuture<FunctionObject>(QtConcurrent::run(task));
+        return waitForFuture(QtConcurrent::run(task));
+    }
+
+    /**
+     * Run a given task then call the defined callback. Prevents event loop blocking and
+     * ensures the validity of the follow-on task through the context. If the context is
+     * deleted, the callback will not be processed preventing use after free errors.
+     *
+     * @param task std::function object to run
+     * @param context QObject responsible for calling this function
+     * @param callback std::function object to run after the task completes
+     */
+    template <typename FunctionObject, typename FunctionObject2>
+    void runThenCallback(FunctionObject task, QObject* context, FunctionObject2 callback)
+    {
+        auto future = QtConcurrent::run(task);
+        auto watcher = new QFutureWatcher<decltype(future.result())>(context);
+        QObject::connect(watcher, &QFutureWatcherBase::finished, context, [=]() {
+            watcher->deleteLater();
+            callback(future.result());
+        });
+        watcher->setFuture(future);
     }
 
 }; // namespace AsyncTask

@@ -1,7 +1,7 @@
 /*
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2012 Felix Geyer <debfx@fobos.de>
  *  Copyright (C) 2000-2008 Tom Sato <VEF00200@nifty.ne.jp>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,50 +17,33 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef KEEPASSX_AUTOTYPEXCB_H
-#define KEEPASSX_AUTOTYPEXCB_H
+#ifndef KEEPASSXC_AUTOTYPEXCB_H
+#define KEEPASSXC_AUTOTYPEXCB_H
 
-#include <QApplication>
 #include <QSet>
-#include <QWidget>
-#include <QX11Info>
-#include <QtPlugin>
+
+#include "autotype/AutoTypePlatform.h"
 
 #include <X11/XKBlib.h>
-#include <X11/Xutil.h>
-#include <X11/extensions/XTest.h>
-
-#include "autotype/AutoTypeAction.h"
-#include "autotype/AutoTypePlatformPlugin.h"
 
 #define N_MOD_INDICES (Mod5MapIndex + 1)
 
 class AutoTypePlatformX11 : public QObject, public AutoTypePlatformInterface
 {
     Q_OBJECT
-    Q_PLUGIN_METADATA(IID "org.keepassx.AutoTypePlatformX11")
-    Q_INTERFACES(AutoTypePlatformInterface)
 
 public:
     AutoTypePlatformX11();
+    ~AutoTypePlatformX11() override;
     bool isAvailable() override;
-    void unload() override;
     QStringList windowTitles() override;
     WId activeWindow() override;
     QString activeWindowTitle() override;
-    bool registerGlobalShortcut(Qt::Key key, Qt::KeyboardModifiers modifiers) override;
-    void unregisterGlobalShortcut(Qt::Key key, Qt::KeyboardModifiers modifiers) override;
-    int platformEventFilter(void* event) override;
     bool raiseWindow(WId window) override;
-    AutoTypeExecutor* createExecutor() override;
+    AutoTypeExecutor& executor() const override;
+    void updateKeymap();
 
-    KeySym charToKeySym(const QChar& ch);
-    KeySym keyToKeySym(Qt::Key key);
-
-    void SendKey(KeySym keysym, unsigned int modifiers = 0);
-
-signals:
-    void globalShortcutTriggered();
+    AutoTypeAction::Result sendKey(KeySym keysym, unsigned int modifiers = Qt::NoModifier);
 
 private:
     QString windowTitle(Window window, bool useBlacklist);
@@ -68,24 +51,17 @@ private:
     QString windowClassName(Window window);
     QList<Window> widgetsToX11Windows(const QWidgetList& widgetList);
     bool isTopLevelWindow(Window window);
-    uint qtToNativeModifiers(Qt::KeyboardModifiers modifiers);
-    void startCatchXErrors();
-    void stopCatchXErrors();
-    static int x11ErrorHandler(Display* display, XErrorEvent* error);
+    unsigned long appUserTime(Window window);
 
     XkbDescPtr getKeyboard();
-    void updateKeymap();
-    bool isRemapKeycodeValid();
-    int AddKeysym(KeySym keysym);
-    void AddModifier(KeySym keysym);
+    bool RemapKeycode(KeySym keysym);
     void SendKeyEvent(unsigned keycode, bool press);
     void SendModifiers(unsigned int mask, bool press);
-    int GetKeycode(KeySym keysym, unsigned int* mask);
-    bool keysymModifiers(KeySym keysym, int keycode, unsigned int* mask);
+    bool GetKeycode(KeySym keysym, int* keycode, int* group, unsigned int* mask, bool* repeat);
 
     static int MyErrorHandler(Display* my_dpy, XErrorEvent* event);
 
-    Display* m_dpy;
+    Display* m_dpy = nullptr;
     Window m_rootWindow;
     Atom m_atomWmState;
     Atom m_atomWmName;
@@ -93,30 +69,26 @@ private:
     Atom m_atomString;
     Atom m_atomUtf8String;
     Atom m_atomNetActiveWindow;
+    Atom m_atomTransientFor;
+    Atom m_atomWindow;
+    Atom m_appUserTime;
     QSet<QString> m_classBlacklist;
-    Qt::Key m_currentGlobalKey;
-    Qt::KeyboardModifiers m_currentGlobalModifiers;
-    uint m_currentGlobalKeycode;
-    uint m_currentGlobalNativeModifiers;
-    int m_modifierMask;
-    static bool m_catchXErrors;
-    static bool m_xErrorOccurred;
-    static int (*m_oldXErrorHandler)(Display*, XErrorEvent*);
 
-    static const int m_unicodeToKeysymLen;
-    static const uint m_unicodeToKeysymKeys[];
-    static const uint m_unicodeToKeysymValues[];
+    typedef struct
+    {
+        KeySym sym;
+        int code;
+        int group;
+        int mask;
+    } KeyDesc;
 
     XkbDescPtr m_xkb;
-    KeySym* m_keysymTable;
-    int m_minKeycode;
-    int m_maxKeycode;
-    int m_keysymPerKeycode;
-    /* dedicated keycode for remapped keys */
-    unsigned int m_remapKeycode;
-    KeySym m_currentRemapKeysym;
+    QList<KeyDesc> m_keymap;
     KeyCode m_modifier_keycode[N_MOD_INDICES];
-    bool m_loaded;
+    KeyCode m_remapKeycode;
+    bool m_loaded = false;
+
+    AutoTypeExecutor* m_executor = nullptr;
 };
 
 class AutoTypeExecutorX11 : public AutoTypeExecutor
@@ -124,12 +96,12 @@ class AutoTypeExecutorX11 : public AutoTypeExecutor
 public:
     explicit AutoTypeExecutorX11(AutoTypePlatformX11* platform);
 
-    void execChar(AutoTypeChar* action) override;
-    void execKey(AutoTypeKey* action) override;
-    void execClearField(AutoTypeClearField* action) override;
+    AutoTypeAction::Result execBegin(const AutoTypeBegin* action) override;
+    AutoTypeAction::Result execType(const AutoTypeKey* action) override;
+    AutoTypeAction::Result execClearField(const AutoTypeClearField* action) override;
 
 private:
     AutoTypePlatformX11* const m_platform;
 };
 
-#endif // KEEPASSX_AUTOTYPEXCB_H
+#endif // KEEPASSXC_AUTOTYPEXCB_H

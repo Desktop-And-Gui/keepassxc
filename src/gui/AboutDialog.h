@@ -20,7 +20,6 @@
 #define KEEPASSX_ABOUTDIALOG_H
 
 #include <QDialog>
-#include <QScopedPointer>
 
 namespace Ui
 {
@@ -33,7 +32,7 @@ class AboutDialog : public QDialog
 
 public:
     explicit AboutDialog(QWidget* parent = nullptr);
-    ~AboutDialog();
+    ~AboutDialog() override;
 
 protected slots:
     void copyToClipboard();

@@ -19,7 +19,6 @@
 #define KEEPASSXC_NEWDATABASEWIZARDPAGE_H
 
 #include <QPointer>
-#include <QScopedPointer>
 #include <QWizardPage>
 
 class Database;
@@ -47,9 +46,6 @@ public:
 
     void initializePage() override;
     bool validatePage() override;
-
-public slots:
-    void toggleAdvancedSettings();
 
 protected:
     QPointer<DatabaseSettingsWidget> m_pageWidget;

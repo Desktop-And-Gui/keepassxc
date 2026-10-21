@@ -20,8 +20,9 @@
 
 #include <QDir>
 
-#include "core/Database.h"
-#include "core/Metadata.h"
+class Database;
+class Group;
+class Entry;
 
 /*!
  * Imports a directory in the 1Password \c opvault format into a \c Database.
@@ -38,7 +39,7 @@ public:
     explicit OpVaultReader(QObject* parent = nullptr);
     ~OpVaultReader() override;
 
-    Database* readDatabase(QDir& opdataDir, const QString& password);
+    QSharedPointer<Database> convert(QDir& opdataDir, const QString& password);
 
     bool hasError();
     QString errorString();
@@ -48,8 +49,7 @@ private:
     {
         QByteArray encrypt;
         QByteArray hmac;
-        bool error;
-        QString errorStr;
+        QString error;
     };
 
     QJsonObject readAndAssertJsonFile(QFile& file, const QString& stripLeading, const QString& stripTrailing);
@@ -98,22 +98,21 @@ private:
     bool fillAttributes(Entry* entry, const QJsonObject& bandEntry);
 
     void fillFromSection(Entry* entry, const QJsonObject& section);
-    void fillFromSectionField(Entry* entry, const QString& sectionName, QJsonObject& field);
+    void fillFromSectionField(Entry* entry, const QString& sectionName, const QJsonObject& field);
     QString resolveAttributeName(const QString& section, const QString& name, const QString& text);
 
     void populateCategoryGroups(Group* rootGroup);
     /*! Used to blank the memory after the keys have been used. */
     void zeroKeys();
 
-    bool m_error;
-    QString m_errorStr;
+    QString m_error;
     QByteArray m_masterKey;
     QByteArray m_masterHmacKey;
     /*! Used to decrypt overview text, such as folder names. */
     QByteArray m_overviewKey;
     QByteArray m_overviewHmacKey;
 
-    friend class TestOpVaultReader;
+    friend class TestImports;
 };
 
 #endif /* OPVAULT_READER_H_ */

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,17 +20,9 @@
 
 #include "TestKeePass2Format.h"
 
-class TestKdbx4 : public TestKeePass2Format
+class TestKdbx4Argon2 : public TestKeePass2Format
 {
     Q_OBJECT
-
-private slots:
-    void testFormat400();
-    void testFormat400Upgrade();
-    void testFormat400Upgrade_data();
-    void testUpgradeMasterKeyIntegrity();
-    void testUpgradeMasterKeyIntegrity_data();
-    void testCustomData();
 
 protected:
     void initTestCaseImpl() override;
@@ -40,19 +32,41 @@ protected:
     readXml(const QString& path, bool strictMode, bool& hasError, QString& errorString) override;
     void writeXml(QBuffer* buf, Database* db, bool& hasError, QString& errorString) override;
 
-    void readKdbx(const QString& path,
-                  QSharedPointer<const CompositeKey> key,
-                  QSharedPointer<Database> db,
-                  bool& hasError,
-                  QString& errorString) override;
     void readKdbx(QIODevice* device,
                   QSharedPointer<const CompositeKey> key,
                   QSharedPointer<Database> db,
                   bool& hasError,
                   QString& errorString) override;
     void writeKdbx(QIODevice* device, Database* db, bool& hasError, QString& errorString) override;
+};
 
-    QSharedPointer<Kdf> fastKdf(QSharedPointer<Kdf> kdf);
+class TestKdbx4AesKdf : public TestKdbx4Argon2
+{
+    Q_OBJECT
+
+protected:
+    void initTestCaseImpl() override;
+};
+
+/**
+ * KDF-independent KDBX4 format tests.
+ */
+class TestKdbx4Format : public QObject
+{
+    Q_OBJECT
+
+private slots:
+    void initTestCase();
+    void init();
+    void cleanup();
+    void testFormat400();
+    void testFormat400Upgrade();
+    void testFormat400Upgrade_data();
+    void testFormat410Upgrade();
+    void testUpgradeMasterKeyIntegrity();
+    void testUpgradeMasterKeyIntegrity_data();
+    void testAttachmentIndexStability();
+    void testCustomData();
 };
 
 #endif // KEEPASSXC_TEST_KDBX4_H

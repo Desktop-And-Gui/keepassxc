@@ -18,7 +18,7 @@
 #ifndef KEEPASSX_FONT_H
 #define KEEPASSX_FONT_H
 
-#include <QFont>
+class QFont;
 
 class Font
 {
@@ -27,9 +27,7 @@ public:
     static QFont fixedFont();
 
 private:
-    Font()
-    {
-    }
+    Font() = default;
 };
 
 #endif // KEEPASSX_FONT_H

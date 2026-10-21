@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2019 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,12 +16,12 @@
  */
 
 #include "PasswordKey.h"
-#include "core/Tools.h"
 
 #include "crypto/CryptoHash.h"
-#include <algorithm>
-#include <cstring>
-#include <gcrypt.h>
+
+#include <QDataStream>
+#include <QIODevice>
+#include <QSharedPointer>
 
 QUuid PasswordKey::UUID("77e90411-303a-43f2-b773-853b05635ead");
 
@@ -29,38 +29,63 @@ constexpr int PasswordKey::SHA256_SIZE;
 
 PasswordKey::PasswordKey()
     : Key(UUID)
-    , m_key(static_cast<char*>(gcry_malloc_secure(SHA256_SIZE)))
+    , m_key(SHA256_SIZE)
 {
 }
 
 PasswordKey::PasswordKey(const QString& password)
     : Key(UUID)
-    , m_key(static_cast<char*>(gcry_malloc_secure(SHA256_SIZE)))
+    , m_key(SHA256_SIZE)
 {
     setPassword(password);
 }
 
-PasswordKey::~PasswordKey()
+QByteArray PasswordKey::rawKey() const
 {
-    if (m_key) {
-        gcry_free(m_key);
-        m_key = nullptr;
+    if (!m_isInitialized) {
+        return {};
     }
+    return {m_key.data(), int(m_key.size())};
+}
+
+void PasswordKey::setRawKey(const QByteArray& data)
+{
+    if (data.isEmpty()) {
+        m_key.clear();
+        m_isInitialized = false;
+    } else {
+        Q_ASSERT(data.size() == SHA256_SIZE);
+        m_key.assign(data.begin(), data.end());
+        m_isInitialized = true;
+    }
+}
+
+void PasswordKey::setPassword(const QString& password)
+{
+    setRawKey(CryptoHash::hash(password.toUtf8(), CryptoHash::Sha256));
 }
 
 QSharedPointer<PasswordKey> PasswordKey::fromRawKey(const QByteArray& rawKey)
 {
     auto result = QSharedPointer<PasswordKey>::create();
-    std::memcpy(result->m_key, rawKey.data(), std::min(SHA256_SIZE, rawKey.size()));
+    result->setRawKey(rawKey);
     return result;
 }
 
-QByteArray PasswordKey::rawKey() const
+QByteArray PasswordKey::serialize() const
 {
-    return QByteArray::fromRawData(m_key, SHA256_SIZE);
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::WriteOnly);
+    stream << uuid().toRfc4122() << rawKey();
+    return data;
 }
 
-void PasswordKey::setPassword(const QString& password)
+void PasswordKey::deserialize(const QByteArray& data)
 {
-    std::memcpy(m_key, CryptoHash::hash(password.toUtf8(), CryptoHash::Sha256).data(), SHA256_SIZE);
+    QByteArray uuidData, key;
+    QDataStream stream(data);
+    stream >> uuidData >> key;
+    if (uuid().toRfc4122() == uuidData) {
+        setRawKey(key);
+    }
 }

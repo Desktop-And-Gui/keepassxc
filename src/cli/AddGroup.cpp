@@ -15,16 +15,13 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cstdlib>
-#include <stdio.h>
-
 #include "AddGroup.h"
 
-#include "cli/TextStream.h"
-#include "cli/Utils.h"
-#include "core/Database.h"
-#include "core/Entry.h"
+#include "Utils.h"
+#include "core/Global.h"
 #include "core/Group.h"
+
+#include <QCommandLineParser>
 
 AddGroup::AddGroup()
 {
@@ -33,14 +30,12 @@ AddGroup::AddGroup()
     positionalArguments.append({QString("group"), QObject::tr("Path of the group to add."), QString("")});
 }
 
-AddGroup::~AddGroup()
-{
-}
+AddGroup::~AddGroup() = default;
 
 int AddGroup::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
-    TextStream outputTextStream(Utils::STDOUT, QIODevice::WriteOnly);
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    auto& out = Utils::STDOUT;
+    auto& err = Utils::STDERR;
 
     const QStringList args = parser->positionalArguments();
     const QString& groupPath = args.at(1);
@@ -51,29 +46,29 @@ int AddGroup::executeWithDatabase(QSharedPointer<Database> database, QSharedPoin
 
     Group* group = database->rootGroup()->findGroupByPath(groupPath);
     if (group) {
-        errorTextStream << QObject::tr("Group %1 already exists!").arg(groupPath) << endl;
+        err << QObject::tr("Group %1 already exists!").arg(groupPath) << Qt::endl;
         return EXIT_FAILURE;
     }
 
     Group* parentGroup = database->rootGroup()->findGroupByPath(parentGroupPath);
     if (!parentGroup) {
-        errorTextStream << QObject::tr("Group %1 not found.").arg(parentGroupPath) << endl;
+        err << QObject::tr("Group %1 not found.").arg(parentGroupPath) << Qt::endl;
         return EXIT_FAILURE;
     }
 
-    Group* newGroup = new Group();
+    auto newGroup = new Group();
     newGroup->setUuid(QUuid::createUuid());
     newGroup->setName(groupName);
     newGroup->setParent(parentGroup);
 
     QString errorMessage;
-    if (!database->save(&errorMessage, true, false)) {
-        errorTextStream << QObject::tr("Writing the database failed %1.").arg(errorMessage) << endl;
+    if (!database->save(Database::Atomic, {}, &errorMessage)) {
+        err << QObject::tr("Writing the database failed %1.").arg(errorMessage) << Qt::endl;
         return EXIT_FAILURE;
     }
 
     if (!parser->isSet(Command::QuietOption)) {
-        outputTextStream << QObject::tr("Successfully added group %1.").arg(groupName) << endl;
+        out << QObject::tr("Successfully added group %1.").arg(groupName) << Qt::endl;
     }
     return EXIT_SUCCESS;
 }

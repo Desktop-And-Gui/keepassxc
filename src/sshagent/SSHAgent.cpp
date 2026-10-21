@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2017 Toni Spets <toni.spets@iki.fi>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,53 +19,119 @@
 #include "SSHAgent.h"
 
 #include "core/Config.h"
-#include "crypto/ssh/BinaryStream.h"
-#include "crypto/ssh/OpenSSHKey.h"
+#include "core/Group.h"
+#include "core/Metadata.h"
+#include "crypto/Random.h"
+#include "sshagent/BinaryStream.h"
 #include "sshagent/KeeAgentSettings.h"
 
-#include <QtNetwork>
+#include <QFileInfo>
+#include <QLocalSocket>
 
 #ifdef Q_OS_WIN
+#include <QtEndian>
 #include <windows.h>
 #endif
 
-SSHAgent* SSHAgent::m_instance;
-
-SSHAgent::SSHAgent(QObject* parent)
-    : QObject(parent)
-{
-#ifndef Q_OS_WIN
-    m_socketPath = QProcessEnvironment::systemEnvironment().value("SSH_AUTH_SOCK");
-#else
-    m_socketPath = "\\\\.\\pipe\\openssh-ssh-agent";
-#endif
-}
-
-SSHAgent::~SSHAgent()
-{
-    auto it = m_addedKeys.begin();
-    while (it != m_addedKeys.end()) {
-        // Remove key if requested to remove on lock
-        if (it.value()) {
-            OpenSSHKey key = it.key();
-            removeIdentity(key);
-        }
-        it = m_addedKeys.erase(it);
-    }
-}
+Q_GLOBAL_STATIC(SSHAgent, s_sshAgent);
 
 SSHAgent* SSHAgent::instance()
 {
-    if (!m_instance) {
-        qFatal("Race condition: instance wanted before it was initialized, this is a bug.");
-    }
-
-    return m_instance;
+    return s_sshAgent;
 }
 
-void SSHAgent::init(QObject* parent)
+bool SSHAgent::isEnabled() const
 {
-    m_instance = new SSHAgent(parent);
+    return config()->get(Config::SSHAgent_Enabled).toBool();
+}
+
+void SSHAgent::setEnabled(bool enabled)
+{
+    if (isEnabled() && !enabled) {
+        removeAllIdentities();
+    }
+
+    config()->set(Config::SSHAgent_Enabled, enabled);
+
+    emit enabledChanged(enabled);
+}
+
+QString SSHAgent::authSockOverride() const
+{
+    return config()->get(Config::SSHAgent_AuthSockOverride).toString();
+}
+
+QString SSHAgent::securityKeyProviderOverride() const
+{
+    return config()->get(Config::SSHAgent_SecurityKeyProviderOverride).toString();
+}
+
+void SSHAgent::setAuthSockOverride(QString& authSockOverride)
+{
+    config()->set(Config::SSHAgent_AuthSockOverride, authSockOverride);
+}
+
+void SSHAgent::setSecurityKeyProviderOverride(QString& securityKeyProviderOverride)
+{
+    config()->set(Config::SSHAgent_SecurityKeyProviderOverride, securityKeyProviderOverride);
+}
+
+#ifdef Q_OS_WIN
+bool SSHAgent::useOpenSSH() const
+{
+    return config()->get(Config::SSHAgent_UseOpenSSH).toBool();
+}
+
+bool SSHAgent::usePageant() const
+{
+    return config()->get(Config::SSHAgent_UsePageant).toBool();
+}
+
+void SSHAgent::setUseOpenSSH(bool useOpenSSH)
+{
+    config()->set(Config::SSHAgent_UseOpenSSH, useOpenSSH);
+}
+
+void SSHAgent::setUsePageant(bool usePageant)
+{
+    config()->set(Config::SSHAgent_UsePageant, usePageant);
+}
+#endif
+
+QString SSHAgent::socketPath(bool allowOverride) const
+{
+    QString socketPath;
+
+#ifndef Q_OS_WIN
+    if (allowOverride) {
+        socketPath = authSockOverride();
+    }
+
+    // if the overridden path is empty (no override set), default to environment
+    if (socketPath.isEmpty()) {
+        socketPath = QProcessEnvironment::systemEnvironment().value("SSH_AUTH_SOCK");
+    }
+#else
+    Q_UNUSED(allowOverride)
+    socketPath = "\\\\.\\pipe\\openssh-ssh-agent";
+#endif
+
+    return socketPath;
+}
+
+QString SSHAgent::securityKeyProvider(bool allowOverride) const
+{
+    QString skProvider;
+
+    if (allowOverride) {
+        skProvider = securityKeyProviderOverride();
+    }
+
+    if (skProvider.isEmpty()) {
+        skProvider = QProcessEnvironment::systemEnvironment().value("SSH_SK_PROVIDER", "internal");
+    }
+
+    return skProvider;
 }
 
 const QString SSHAgent::errorString() const
@@ -76,12 +142,18 @@ const QString SSHAgent::errorString() const
 bool SSHAgent::isAgentRunning() const
 {
 #ifndef Q_OS_WIN
-    return !m_socketPath.isEmpty();
+    QFileInfo socketFileInfo(socketPath());
+    return !socketFileInfo.path().isEmpty() && socketFileInfo.exists();
 #else
-    if (!config()->get("SSHAgentOpenSSH").toBool()) {
+    const auto pathString = QString::fromLatin1(socketPath().toLatin1());
+    if (usePageant() && useOpenSSH()) {
+        return (FindWindowA("Pageant", "Pageant") != nullptr) && WaitNamedPipe(pathString.toStdWString().c_str(), 100);
+    } else if (useOpenSSH()) {
+        return WaitNamedPipe(pathString.toStdWString().c_str(), 100);
+    } else if (usePageant()) {
         return (FindWindowA("Pageant", "Pageant") != nullptr);
     } else {
-        return WaitNamedPipe(m_socketPath.toLatin1().data(), 100);
+        return false;
     }
 #endif
 }
@@ -89,15 +161,24 @@ bool SSHAgent::isAgentRunning() const
 bool SSHAgent::sendMessage(const QByteArray& in, QByteArray& out)
 {
 #ifdef Q_OS_WIN
-    if (!config()->get("SSHAgentOpenSSH").toBool()) {
-        return sendMessagePageant(in, out);
+    if (usePageant() && !sendMessagePageant(in, out)) {
+        return false;
     }
+    if (useOpenSSH() && !sendMessageOpenSSH(in, out)) {
+        return false;
+    }
+    return true;
+#else
+    return sendMessageOpenSSH(in, out);
 #endif
+}
 
+bool SSHAgent::sendMessageOpenSSH(const QByteArray& in, QByteArray& out)
+{
     QLocalSocket socket;
     BinaryStream stream(&socket);
 
-    socket.connectToServer(m_socketPath);
+    socket.connectToServer(socketPath());
     if (!socket.waitForConnected(500)) {
         m_error = tr("Agent connection failed.");
         return false;
@@ -112,7 +193,6 @@ bool SSHAgent::sendMessage(const QByteArray& in, QByteArray& out)
     }
 
     socket.close();
-
     return true;
 }
 
@@ -131,9 +211,7 @@ bool SSHAgent::sendMessagePageant(const QByteArray& in, QByteArray& out)
         return false;
     }
 
-    QByteArray mapName =
-        (QString("SSHAgentRequest") + reinterpret_cast<intptr_t>(QThread::currentThreadId())).toLatin1();
-
+    QByteArray mapName = randomGen()->randomArray(16).toHex();
     HANDLE handle = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, AGENT_MAX_MSGLEN, mapName.data());
 
     if (!handle) {
@@ -185,24 +263,30 @@ bool SSHAgent::sendMessagePageant(const QByteArray& in, QByteArray& out)
  * Add the identity to the SSH agent.
  *
  * @param key identity / key to add
- * @param lifetime time after which the key should expire
- * @param confirm ask for confirmation before adding the key
- * @param removeOnLock autoremove from agent when the Database is locked
+ * @param settings constraints (lifetime, confirm), remove-on-lock
+ * @param databaseUuid database that owns the key for remove-on-lock
  * @return true on success
  */
-bool SSHAgent::addIdentity(OpenSSHKey& key, KeeAgentSettings& settings)
+bool SSHAgent::addIdentity(OpenSSHKey& key, const KeeAgentSettings& settings, const QUuid& databaseUuid)
 {
     if (!isAgentRunning()) {
         m_error = tr("No agent running, cannot add identity.");
         return false;
     }
 
+    if (m_addedKeys.contains(key) && m_addedKeys[key].first != databaseUuid) {
+        m_error = tr("Key identity ownership conflict. Refusing to add.");
+        return false;
+    }
+
     QByteArray requestData;
     BinaryStream request(&requestData);
+    bool isSecurityKey = key.type().startsWith("sk-");
 
-    request.write((settings.useLifetimeConstraintWhenAdding() || settings.useConfirmConstraintWhenAdding())
-                      ? SSH_AGENTC_ADD_ID_CONSTRAINED
-                      : SSH_AGENTC_ADD_IDENTITY);
+    request.write(
+        (settings.useLifetimeConstraintWhenAdding() || settings.useConfirmConstraintWhenAdding() || isSecurityKey)
+            ? SSH_AGENTC_ADD_ID_CONSTRAINED
+            : SSH_AGENTC_ADD_IDENTITY);
     key.writePrivate(request);
 
     if (settings.useLifetimeConstraintWhenAdding()) {
@@ -212,6 +296,12 @@ bool SSHAgent::addIdentity(OpenSSHKey& key, KeeAgentSettings& settings)
 
     if (settings.useConfirmConstraintWhenAdding()) {
         request.write(SSH_AGENT_CONSTRAIN_CONFIRM);
+    }
+
+    if (isSecurityKey) {
+        request.write(SSH_AGENT_CONSTRAIN_EXTENSION);
+        request.writeString(QString("sk-provider@openssh.com"));
+        request.writeString(securityKeyProvider());
     }
 
     QByteArray responseData;
@@ -231,12 +321,17 @@ bool SSHAgent::addIdentity(OpenSSHKey& key, KeeAgentSettings& settings)
             m_error += "\n" + tr("A confirmation request is not supported by the agent (check options).");
         }
 
+        if (isSecurityKey) {
+            m_error +=
+                "\n" + tr("Security keys are not supported by the agent or the security key provider is unavailable.");
+        }
+
         return false;
     }
 
     OpenSSHKey keyCopy = key;
     keyCopy.clearPrivate();
-    m_addedKeys[keyCopy] = settings.removeAtDatabaseClose();
+    m_addedKeys[keyCopy] = qMakePair(databaseUuid, settings.removeAtDatabaseClose());
     return true;
 }
 
@@ -268,6 +363,157 @@ bool SSHAgent::removeIdentity(OpenSSHKey& key)
 }
 
 /**
+ * Remove all identities from the SSH agent.
+ *
+ * Since the agent might be forwarded, old or non-OpenSSH, when asked
+ * to remove all keys, attempt to remove both protocol v.1 and v.2
+ * keys.
+ *
+ * @return true on success
+ */
+bool SSHAgent::clearAllAgentIdentities()
+{
+    if (!isAgentRunning()) {
+        m_error = tr("No agent running, cannot remove identity.");
+        return false;
+    }
+
+    bool ret = true;
+    QByteArray requestData;
+    QByteArray responseData;
+    BinaryStream request(&requestData);
+
+    // SSH2 Identity Removal
+    request.write(SSH2_AGENTC_REMOVE_ALL_IDENTITIES);
+
+    if (!sendMessage(requestData, responseData)) {
+        m_error = tr("Failed to remove all SSH identities from agent.");
+        ret = false;
+    }
+
+    request.flush();
+    responseData.clear();
+
+    // SSH1 Identity Removal
+    request.write(SSH_AGENTC_REMOVE_ALL_RSA_IDENTITIES);
+
+    // ignore error-code for ssh1
+    sendMessage(requestData, responseData);
+
+    m_error = tr("All SSH identities removed from agent.");
+    return ret;
+}
+
+/**
+ * Get a list of identities from the SSH agent.
+ *
+ * @param list list of keys to append
+ * @return true on success
+ */
+bool SSHAgent::listIdentities(QList<QSharedPointer<OpenSSHKey>>& list)
+{
+    if (!isAgentRunning()) {
+        m_error = tr("No agent running, cannot list identities.");
+        return false;
+    }
+
+    QByteArray requestData;
+    BinaryStream request(&requestData);
+
+    request.write(SSH_AGENTC_REQUEST_IDENTITIES);
+
+    QByteArray responseData;
+    if (!sendMessage(requestData, responseData)) {
+        return false;
+    }
+
+    BinaryStream response(&responseData);
+
+    quint8 responseType;
+    if (!response.read(responseType) || responseType != SSH_AGENT_IDENTITIES_ANSWER) {
+        m_error = tr("Agent protocol error.");
+        return false;
+    }
+
+    quint32 nKeys;
+    if (!response.read(nKeys)) {
+        m_error = tr("Agent protocol error.");
+        return false;
+    }
+
+    for (quint32 i = 0; i < nKeys; i++) {
+        QByteArray publicData;
+        QString comment;
+
+        if (!response.readString(publicData)) {
+            m_error = tr("Agent protocol error.");
+            return false;
+        }
+
+        if (!response.readString(comment)) {
+            m_error = tr("Agent protocol error.");
+            return false;
+        }
+
+        OpenSSHKey* key = new OpenSSHKey();
+        key->setComment(comment);
+
+        list.append(QSharedPointer<OpenSSHKey>(key));
+
+        BinaryStream publicDataStream(&publicData);
+        if (!key->readPublic(publicDataStream)) {
+            m_error = key->errorString();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Check if this identity is loaded in the SSH Agent.
+ *
+ * @param key identity to remove
+ * @param loaded is the key loaded
+ * @return true on success
+ */
+bool SSHAgent::checkIdentity(const OpenSSHKey& key, bool& loaded)
+{
+    QList<QSharedPointer<OpenSSHKey>> list;
+
+    if (!listIdentities(list)) {
+        return false;
+    }
+
+    loaded = false;
+
+    for (const auto& it : list) {
+        if (*it == key) {
+            loaded = true;
+            break;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Remove all identities known to this instance
+ */
+void SSHAgent::removeAllIdentities()
+{
+    auto it = m_addedKeys.begin();
+    while (it != m_addedKeys.end()) {
+        // Remove key if requested to remove on lock
+        if (it.value().second) {
+            OpenSSHKey key = it.key();
+            removeIdentity(key);
+        }
+        it = m_addedKeys.erase(it);
+    }
+}
+
+/**
  * Change "remove identity on lock" setting for a key already added to the agent.
  * Will to nothing if the key has not been added to the agent.
  *
@@ -277,104 +523,63 @@ bool SSHAgent::removeIdentity(OpenSSHKey& key)
 void SSHAgent::setAutoRemoveOnLock(const OpenSSHKey& key, bool autoRemove)
 {
     if (m_addedKeys.contains(key)) {
-        m_addedKeys[key] = autoRemove;
+        m_addedKeys[key].second = autoRemove;
     }
 }
 
-void SSHAgent::databaseModeChanged()
+void SSHAgent::databaseLocked(const QSharedPointer<Database>& db)
 {
-    auto* widget = qobject_cast<DatabaseWidget*>(sender());
-    if (!widget) {
+    if (!db) {
         return;
     }
 
-    if (widget->isLocked()) {
-        auto it = m_addedKeys.begin();
-        while (it != m_addedKeys.end()) {
-            OpenSSHKey key = it.key();
-            if (it.value()) {
-                if (!removeIdentity(key)) {
-                    emit error(m_error);
-                }
-                it = m_addedKeys.erase(it);
-            } else {
-                // don't remove it yet
-                m_addedKeys[key] = false;
-                ++it;
-            }
-        }
-
-        return;
-    }
-
-    for (Entry* e : widget->database()->rootGroup()->entriesRecursive()) {
-
-        if (widget->database()->metadata()->recycleBinEnabled()
-            && e->group() == widget->database()->metadata()->recycleBin()) {
+    auto it = m_addedKeys.begin();
+    while (it != m_addedKeys.end()) {
+        if (it.value().first != db->uuid()) {
+            ++it;
             continue;
         }
+        OpenSSHKey key = it.key();
+        if (it.value().second) {
+            if (!removeIdentity(key)) {
+                emit error(m_error);
+            }
+        }
+        it = m_addedKeys.erase(it);
+    }
+}
 
-        if (!e->attachments()->hasKey("KeeAgent.settings")) {
+void SSHAgent::databaseUnlocked(const QSharedPointer<Database>& db)
+{
+    if (!db || !isEnabled()) {
+        return;
+    }
+
+    for (auto entry : db->rootGroup()->entriesRecursive()) {
+        if (entry->isRecycled()) {
             continue;
         }
 
         KeeAgentSettings settings;
-        settings.fromXml(e->attachments()->value("KeeAgent.settings"));
 
-        if (!settings.allowUseOfSshKey()) {
+        if (!settings.fromEntry(entry)) {
             continue;
         }
 
-        QByteArray keyData;
-        QString fileName;
-        if (settings.selectedType() == "attachment") {
-            fileName = settings.attachmentName();
-            keyData = e->attachments()->value(fileName);
-        } else if (!settings.fileName().isEmpty()) {
-            QFile file(settings.fileName());
-            QFileInfo fileInfo(file);
-
-            fileName = fileInfo.fileName();
-
-            if (file.size() > 1024 * 1024) {
-                continue;
-            }
-
-            if (!file.open(QIODevice::ReadOnly)) {
-                continue;
-            }
-
-            keyData = file.readAll();
-        }
-
-        if (keyData.isEmpty()) {
+        if (!settings.allowUseOfSshKey() || !settings.addAtDatabaseOpen()) {
             continue;
         }
 
         OpenSSHKey key;
 
-        if (!key.parsePKCS1PEM(keyData)) {
+        if (!settings.toOpenSSHKey(entry, key, true)) {
             continue;
         }
 
-        if (!key.openKey(e->password())) {
-            continue;
-        }
-
-        if (key.comment().isEmpty()) {
-            key.setComment(e->username());
-        }
-
-        if (key.comment().isEmpty()) {
-            key.setComment(fileName);
-        }
-
-        if (settings.addAtDatabaseOpen()) {
-            // Add key to agent; ignore errors if we have previously added the key
-            bool known_key = m_addedKeys.contains(key);
-            if (!addIdentity(key, settings) && !known_key) {
-                emit error(m_error);
-            }
+        // Add key to agent; ignore errors if we have previously added the key
+        bool known_key = m_addedKeys.contains(key);
+        if (!addIdentity(key, settings, db->uuid()) && !known_key) {
+            emit error(m_error);
         }
     }
 }

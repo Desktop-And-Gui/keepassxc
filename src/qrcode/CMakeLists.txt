@@ -1,4 +1,4 @@
-#  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+#  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -17,5 +17,8 @@ set(qrcode_SOURCES
     QrCode.cpp
 )
 
+find_package(QREncode REQUIRED)
+
 add_library(qrcode STATIC ${qrcode_SOURCES})
-target_link_libraries(qrcode Qt5::Core Qt5::Widgets Qt5::Svg ${QRENCODE_LIBRARY})
+target_include_directories(qrcode PRIVATE ${QRENCODE_INCLUDE_DIR})
+target_link_libraries(qrcode PUBLIC Qt6::Core Qt6::Svg ${QRENCODE_LIBRARY})

@@ -20,6 +20,9 @@
 
 #include <QAbstractTableModel>
 #include <QPixmap>
+#include <QSet>
+
+#include "core/Config.h"
 
 class Entry;
 class Group;
@@ -40,10 +43,14 @@ public:
         Expires = 6,
         Created = 7,
         Modified = 8,
-        Accessed = 9,
+        Accessed = 9, // Kept for compatibility
         Paperclip = 10,
         Attachments = 11,
-        Totp = 12
+        Totp = 12,
+        Size = 13,
+        PasswordStrength = 14,
+        Color = 15,
+        ParentGroupPath = 16
     };
 
     explicit EntryModel(QObject* parent = nullptr);
@@ -62,41 +69,32 @@ public:
 
     void setGroup(Group* group);
     void setEntries(const QList<Entry*>& entries);
-
-    bool isUsernamesHidden() const;
-    void setUsernamesHidden(bool hide);
-    bool isPasswordsHidden() const;
-    void setPasswordsHidden(bool hide);
-
-    void setPaperClipPixmap(const QPixmap& paperclip);
-
-signals:
-    void usernamesHiddenChanged();
-    void passwordsHiddenChanged();
+    void setBackgroundColorVisible(bool visible);
 
 private slots:
     void entryAboutToAdd(Entry* entry);
     void entryAdded(Entry* entry);
     void entryAboutToRemove(Entry* entry);
     void entryRemoved();
+    void entryAboutToMoveUp(int row);
+    void entryMovedUp();
+    void entryAboutToMoveDown(int row);
+    void entryMovedDown();
     void entryDataChanged(Entry* entry);
+
+    void onConfigChanged(Config::ConfigKey key);
 
 private:
     void severConnections();
     void makeConnections(const Group* group);
 
+    bool m_backgroundColorVisible = true;
     Group* m_group;
     QList<Entry*> m_entries;
     QList<Entry*> m_orgEntries;
-    QList<const Group*> m_allGroups;
-
-    bool m_hideUsernames;
-    bool m_hidePasswords;
-
-    QPixmap m_paperClipPixmap;
+    QSet<const Group*> m_allGroups;
 
     const QString HiddenContentDisplay;
-    const Qt::DateFormat DateFormat;
 };
 
 #endif // KEEPASSX_ENTRYMODEL_H

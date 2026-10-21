@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,8 +20,7 @@
 
 #include "DatabaseSettingsWidget.h"
 
-#include <QPointer>
-#include <QScopedPointer>
+#include "crypto/kdf/Kdf.h"
 
 class Database;
 namespace Ui
@@ -38,35 +37,28 @@ public:
     Q_DISABLE_COPY(DatabaseSettingsWidgetEncryption);
     ~DatabaseSettingsWidgetEncryption() override;
 
-    inline bool hasAdvancedMode() const override
-    {
-        return true;
-    }
-    void setAdvancedMode(bool advanced) override;
-
 public slots:
     void initialize() override;
     void uninitialize() override;
-    bool save() override;
+    bool saveSettings() override;
 
 protected:
     void showEvent(QShowEvent* event) override;
 
 private slots:
-    void benchmarkTransformRounds(int millisecs = 1000);
-    void changeKdf(int index);
+    void benchmarkTransformRounds(int millisecs = Kdf::DEFAULT_ENCRYPTION_TIME);
     void memoryChanged(int value);
     void parallelismChanged(int value);
     void updateDecryptionTime(int value);
-    void updateFormatCompatibility(int index, bool retransform = true);
-    void setupAlgorithmComboBox();
-    void setupKdfComboBox();
+    void loadKdfAlgorithms();
     void loadKdfParameters();
     void updateKdfFields();
-    void activateChangeDecryptionTime();
     void markDirty();
 
 private:
+    bool isAdvancedMode();
+    void showBasicEncryption(int decryptionMillisecs = Kdf::DEFAULT_ENCRYPTION_TIME);
+
     enum FormatSelection
     {
         KDBX4,
@@ -75,7 +67,7 @@ private:
     static const char* CD_DECRYPTION_TIME_PREFERENCE_KEY;
 
     bool m_isDirty = false;
-    bool m_formatCompatibilityDirty = false;
+    bool m_initWithAdvanced = false;
     const QScopedPointer<Ui::DatabaseSettingsWidgetEncryption> m_ui;
 };
 

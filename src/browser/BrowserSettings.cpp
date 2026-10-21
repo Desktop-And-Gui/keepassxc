@@ -1,7 +1,7 @@
 /*
- *  Copyright (C) 2013 Francois Ferrand
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2017 Sami Vänttinen <sami.vanttinen@protonmail.com>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2013 Francois Ferrand
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,6 +19,10 @@
 
 #include "BrowserSettings.h"
 #include "core/Config.h"
+#include "core/PasswordHealth.h"
+#include <QDir>
+
+#include <QJsonObject>
 
 BrowserSettings* BrowserSettings::m_instance(nullptr);
 
@@ -33,521 +37,261 @@ BrowserSettings* BrowserSettings::instance()
 
 bool BrowserSettings::isEnabled()
 {
-    return config()->get("Browser/Enabled", false).toBool();
+    return config()->get(Config::Browser_Enabled).toBool();
 }
 
 void BrowserSettings::setEnabled(bool enabled)
 {
-    config()->set("Browser/Enabled", enabled);
+    config()->set(Config::Browser_Enabled, enabled);
 }
 
 bool BrowserSettings::showNotification()
 {
-    return config()->get("Browser/ShowNotification", true).toBool();
+    return config()->get(Config::Browser_ShowNotification).toBool();
 }
 
 void BrowserSettings::setShowNotification(bool showNotification)
 {
-    config()->set("Browser/ShowNotification", showNotification);
+    config()->set(Config::Browser_ShowNotification, showNotification);
 }
 
 bool BrowserSettings::bestMatchOnly()
 {
-    return config()->get("Browser/BestMatchOnly", false).toBool();
+    return config()->get(Config::Browser_BestMatchOnly).toBool();
 }
 
 void BrowserSettings::setBestMatchOnly(bool bestMatchOnly)
 {
-    config()->set("Browser/BestMatchOnly", bestMatchOnly);
+    config()->set(Config::Browser_BestMatchOnly, bestMatchOnly);
 }
 
 bool BrowserSettings::unlockDatabase()
 {
-    return config()->get("Browser/UnlockDatabase", true).toBool();
+    return config()->get(Config::Browser_UnlockDatabase).toBool();
 }
 
 void BrowserSettings::setUnlockDatabase(bool unlockDatabase)
 {
-    config()->set("Browser/UnlockDatabase", unlockDatabase);
+    config()->set(Config::Browser_UnlockDatabase, unlockDatabase);
 }
 
 bool BrowserSettings::matchUrlScheme()
 {
-    return config()->get("Browser/MatchUrlScheme", true).toBool();
+    return config()->get(Config::Browser_MatchUrlScheme).toBool();
 }
 
 void BrowserSettings::setMatchUrlScheme(bool matchUrlScheme)
 {
-    config()->set("Browser/MatchUrlScheme", matchUrlScheme);
-}
-
-bool BrowserSettings::sortByUsername()
-{
-    return config()->get("Browser/SortByUsername", false).toBool();
-}
-
-void BrowserSettings::setSortByUsername(bool sortByUsername)
-{
-    config()->set("Browser/SortByUsername", sortByUsername);
-}
-
-bool BrowserSettings::sortByTitle()
-{
-    return !sortByUsername();
-}
-
-void BrowserSettings::setSortByTitle(bool sortByUsertitle)
-{
-    setSortByUsername(!sortByUsertitle);
+    config()->set(Config::Browser_MatchUrlScheme, matchUrlScheme);
 }
 
 bool BrowserSettings::alwaysAllowAccess()
 {
-    return config()->get("Browser/AlwaysAllowAccess", false).toBool();
+    return config()->get(Config::Browser_AlwaysAllowAccess).toBool();
 }
 
 void BrowserSettings::setAlwaysAllowAccess(bool alwaysAllowAccess)
 {
-    config()->set("Browser/AlwaysAllowAccess", alwaysAllowAccess);
+    config()->set(Config::Browser_AlwaysAllowAccess, alwaysAllowAccess);
 }
 
 bool BrowserSettings::alwaysAllowUpdate()
 {
-    return config()->get("Browser/AlwaysAllowUpdate", false).toBool();
+    return config()->get(Config::Browser_AlwaysAllowUpdate).toBool();
 }
 
 void BrowserSettings::setAlwaysAllowUpdate(bool alwaysAllowUpdate)
 {
-    config()->set("Browser/AlwaysAllowUpdate", alwaysAllowUpdate);
+    config()->set(Config::Browser_AlwaysAllowUpdate, alwaysAllowUpdate);
 }
 
 bool BrowserSettings::httpAuthPermission()
 {
-    return config()->get("Browser/HttpAuthPermission", false).toBool();
+    return config()->get(Config::Browser_HttpAuthPermission).toBool();
 }
 
 void BrowserSettings::setHttpAuthPermission(bool httpAuthPermission)
 {
-    config()->set("Browser/HttpAuthPermission", httpAuthPermission);
+    config()->set(Config::Browser_HttpAuthPermission, httpAuthPermission);
 }
 
 bool BrowserSettings::searchInAllDatabases()
 {
-    return config()->get("Browser/SearchInAllDatabases", false).toBool();
+    return config()->get(Config::Browser_SearchInAllDatabases).toBool();
 }
 
 void BrowserSettings::setSearchInAllDatabases(bool searchInAllDatabases)
 {
-    config()->set("Browser/SearchInAllDatabases", searchInAllDatabases);
+    config()->set(Config::Browser_SearchInAllDatabases, searchInAllDatabases);
 }
 
 bool BrowserSettings::supportKphFields()
 {
-    return config()->get("Browser/SupportKphFields", true).toBool();
+    return config()->get(Config::Browser_SupportKphFields).toBool();
 }
 
 void BrowserSettings::setSupportKphFields(bool supportKphFields)
 {
-    config()->set("Browser/SupportKphFields", supportKphFields);
+    config()->set(Config::Browser_SupportKphFields, supportKphFields);
 }
 
 bool BrowserSettings::noMigrationPrompt()
 {
-    return config()->get("Browser/NoMigrationPrompt", false).toBool();
+    return config()->get(Config::Browser_NoMigrationPrompt).toBool();
 }
 
 void BrowserSettings::setNoMigrationPrompt(bool prompt)
 {
-    config()->set("Browser/NoMigrationPrompt", prompt);
+    config()->set(Config::Browser_NoMigrationPrompt, prompt);
 }
 
-bool BrowserSettings::supportBrowserProxy()
+bool BrowserSettings::allowLocalhostWithPasskeys()
 {
-    return config()->get("Browser/SupportBrowserProxy", true).toBool();
+    return config()->get(Config::Browser_AllowLocalhostWithPasskeys).toBool();
 }
 
-void BrowserSettings::setSupportBrowserProxy(bool enabled)
+void BrowserSettings::setAllowLocalhostWithPasskeys(bool enabled)
 {
-    config()->set("Browser/SupportBrowserProxy", enabled);
+    config()->set(Config::Browser_AllowLocalhostWithPasskeys, enabled);
 }
 
 bool BrowserSettings::useCustomProxy()
 {
-    return config()->get("Browser/UseCustomProxy", false).toBool();
+    return config()->get(Config::Browser_UseCustomProxy).toBool();
 }
 
 void BrowserSettings::setUseCustomProxy(bool enabled)
 {
-    config()->set("Browser/UseCustomProxy", enabled);
+    config()->set(Config::Browser_UseCustomProxy, enabled);
 }
 
 QString BrowserSettings::customProxyLocation()
 {
-    if (!useCustomProxy()) {
-        return QString();
-    }
-    return config()->get("Browser/CustomProxyLocation", "").toString();
+    return config()->get(Config::Browser_CustomProxyLocation).toString();
 }
 
 void BrowserSettings::setCustomProxyLocation(const QString& location)
 {
-    config()->set("Browser/CustomProxyLocation", location);
+    config()->set(Config::Browser_CustomProxyLocation, location);
 }
+
+bool BrowserSettings::customBrowserSupport()
+{
+    return config()->get(Config::Browser_UseCustomBrowser).toBool();
+}
+
+void BrowserSettings::setCustomBrowserSupport(bool enabled)
+{
+    config()->set(Config::Browser_UseCustomBrowser, enabled);
+}
+
+int BrowserSettings::customBrowserType()
+{
+    return config()->get(Config::Browser_CustomBrowserType).toInt();
+}
+
+void BrowserSettings::setCustomBrowserType(int type)
+{
+    config()->set(Config::Browser_CustomBrowserType, type);
+}
+
+QString BrowserSettings::customBrowserLocation()
+{
+    return config()->get(Config::Browser_CustomBrowserLocation).toString();
+}
+
+void BrowserSettings::setCustomBrowserLocation(const QString& location)
+{
+    config()->set(Config::Browser_CustomBrowserLocation, location);
+}
+
+QString BrowserSettings::proxyLocation()
+{
+    return m_nativeMessageInstaller.getProxyPath();
+}
+
+QString BrowserSettings::proxyLocationAsInstalled() const
+{
+    return m_nativeMessageInstaller.getInstalledProxyPath();
+}
+
+#ifdef QT_DEBUG
+QString BrowserSettings::customExtensionId()
+{
+    return config()->get(Config::Browser_CustomExtensionId).toString();
+}
+
+void BrowserSettings::setCustomExtensionId(const QString& id)
+{
+    config()->set(Config::Browser_CustomExtensionId, id);
+}
+#endif
 
 bool BrowserSettings::updateBinaryPath()
 {
-    return config()->get("Browser/UpdateBinaryPath", true).toBool();
+    return config()->get(Config::Browser_UpdateBinaryPath).toBool();
 }
 
 void BrowserSettings::setUpdateBinaryPath(bool enabled)
 {
-    config()->set("Browser/UpdateBinaryPath", enabled);
+    config()->set(Config::Browser_UpdateBinaryPath, enabled);
+}
+
+bool BrowserSettings::allowGetDatabaseEntriesRequest()
+{
+    return config()->get(Config::Browser_AllowGetDatabaseEntriesRequest).toBool();
+}
+
+void BrowserSettings::setAllowGetDatabaseEntriesRequest(bool enabled)
+{
+    config()->set(Config::Browser_AllowGetDatabaseEntriesRequest, enabled);
 }
 
 bool BrowserSettings::allowExpiredCredentials()
 {
-    return config()->get("Browser/AllowExpiredCredentials", false).toBool();
+    return config()->get(Config::Browser_AllowExpiredCredentials).toBool();
 }
 
 void BrowserSettings::setAllowExpiredCredentials(bool enabled)
 {
-    config()->set("Browser/AllowExpiredCredentials", enabled);
+    config()->set(Config::Browser_AllowExpiredCredentials, enabled);
 }
 
-bool BrowserSettings::chromeSupport()
+bool BrowserSettings::browserSupport(BrowserShared::SupportedBrowsers browser)
 {
-    return m_hostInstaller.checkIfInstalled(HostInstaller::SupportedBrowsers::CHROME);
+    return m_nativeMessageInstaller.isBrowserEnabled(browser);
 }
 
-void BrowserSettings::setChromeSupport(bool enabled)
+void BrowserSettings::setBrowserSupport(BrowserShared::SupportedBrowsers browser, bool enabled)
 {
-    m_hostInstaller.installBrowser(
-        HostInstaller::SupportedBrowsers::CHROME, enabled, supportBrowserProxy(), customProxyLocation());
+    m_nativeMessageInstaller.setBrowserEnabled(browser, enabled);
 }
 
-bool BrowserSettings::chromiumSupport()
+void BrowserSettings::updateBinaryPaths()
 {
-    return m_hostInstaller.checkIfInstalled(HostInstaller::SupportedBrowsers::CHROMIUM);
+    m_nativeMessageInstaller.updateBinaryPaths();
 }
 
-void BrowserSettings::setChromiumSupport(bool enabled)
+QString BrowserSettings::replaceHomePath(QString location)
 {
-    m_hostInstaller.installBrowser(
-        HostInstaller::SupportedBrowsers::CHROMIUM, enabled, supportBrowserProxy(), customProxyLocation());
-}
-
-bool BrowserSettings::firefoxSupport()
-{
-    return m_hostInstaller.checkIfInstalled(HostInstaller::SupportedBrowsers::FIREFOX);
-}
-
-void BrowserSettings::setFirefoxSupport(bool enabled)
-{
-    m_hostInstaller.installBrowser(
-        HostInstaller::SupportedBrowsers::FIREFOX, enabled, supportBrowserProxy(), customProxyLocation());
-}
-
-bool BrowserSettings::vivaldiSupport()
-{
-    return m_hostInstaller.checkIfInstalled(HostInstaller::SupportedBrowsers::VIVALDI);
-}
-
-void BrowserSettings::setVivaldiSupport(bool enabled)
-{
-    m_hostInstaller.installBrowser(
-        HostInstaller::SupportedBrowsers::VIVALDI, enabled, supportBrowserProxy(), customProxyLocation());
-}
-
-bool BrowserSettings::braveSupport()
-{
-    return m_hostInstaller.checkIfInstalled(HostInstaller::SupportedBrowsers::BRAVE);
-}
-
-void BrowserSettings::setBraveSupport(bool enabled)
-{
-    m_hostInstaller.installBrowser(
-        HostInstaller::SupportedBrowsers::BRAVE, enabled, supportBrowserProxy(), customProxyLocation());
-}
-
-bool BrowserSettings::torBrowserSupport()
-{
-    return m_hostInstaller.checkIfInstalled(HostInstaller::SupportedBrowsers::TOR_BROWSER);
-}
-
-void BrowserSettings::setTorBrowserSupport(bool enabled)
-{
-    m_hostInstaller.installBrowser(
-        HostInstaller::SupportedBrowsers::TOR_BROWSER, enabled, supportBrowserProxy(), customProxyLocation());
-}
-
-bool BrowserSettings::passwordUseNumbers()
-{
-    return config()->get("generator/Numbers", PasswordGenerator::DefaultNumbers).toBool();
-}
-
-void BrowserSettings::setPasswordUseNumbers(bool useNumbers)
-{
-    config()->set("generator/Numbers", useNumbers);
-}
-
-bool BrowserSettings::passwordUseLowercase()
-{
-    return config()->get("generator/LowerCase", PasswordGenerator::DefaultLower).toBool();
-}
-
-void BrowserSettings::setPasswordUseLowercase(bool useLowercase)
-{
-    config()->set("generator/LowerCase", useLowercase);
-}
-
-bool BrowserSettings::passwordUseUppercase()
-{
-    return config()->get("generator/UpperCase", PasswordGenerator::DefaultUpper).toBool();
-}
-
-void BrowserSettings::setPasswordUseUppercase(bool useUppercase)
-{
-    config()->set("generator/UpperCase", useUppercase);
-}
-
-bool BrowserSettings::passwordUseSpecial()
-{
-    return config()->get("generator/SpecialChars", PasswordGenerator::DefaultSpecial).toBool();
-}
-
-void BrowserSettings::setPasswordUseSpecial(bool useSpecial)
-{
-    config()->set("generator/SpecialChars", useSpecial);
-}
-
-bool BrowserSettings::passwordUseBraces()
-{
-    return config()->get("generator/Braces", PasswordGenerator::DefaultBraces).toBool();
-}
-
-void BrowserSettings::setPasswordUseBraces(bool useBraces)
-{
-    config()->set("generator/Braces", useBraces);
-}
-
-bool BrowserSettings::passwordUsePunctuation()
-{
-    return config()->get("generator/Punctuation", PasswordGenerator::DefaultQuotes).toBool();
-}
-
-void BrowserSettings::setPasswordUsePunctuation(bool usePunctuation)
-{
-    config()->set("generator/Punctuation", usePunctuation);
-}
-
-bool BrowserSettings::passwordUseQuotes()
-{
-    return config()->get("generator/Quotes", PasswordGenerator::DefaultQuotes).toBool();
-}
-
-void BrowserSettings::setPasswordUseQuotes(bool useQuotes)
-{
-    config()->set("generator/Quotes", useQuotes);
-}
-
-bool BrowserSettings::passwordUseDashes()
-{
-    return config()->get("generator/Dashes", PasswordGenerator::DefaultDashes).toBool();
-}
-
-void BrowserSettings::setPasswordUseDashes(bool useDashes)
-{
-    config()->set("generator/Dashes", useDashes);
-}
-
-bool BrowserSettings::passwordUseMath()
-{
-    return config()->get("generator/Math", PasswordGenerator::DefaultMath).toBool();
-}
-
-void BrowserSettings::setPasswordUseMath(bool useMath)
-{
-    config()->set("generator/Math", useMath);
-}
-
-bool BrowserSettings::passwordUseLogograms()
-{
-    return config()->get("generator/Logograms", PasswordGenerator::DefaultLogograms).toBool();
-}
-
-void BrowserSettings::setPasswordUseLogograms(bool useLogograms)
-{
-    config()->set("generator/Logograms", useLogograms);
-}
-
-bool BrowserSettings::passwordUseEASCII()
-{
-    return config()->get("generator/EASCII", PasswordGenerator::DefaultEASCII).toBool();
-}
-
-void BrowserSettings::setPasswordUseEASCII(bool useEASCII)
-{
-    config()->set("generator/EASCII", useEASCII);
-}
-
-bool BrowserSettings::advancedMode()
-{
-    return config()->get("generator/AdvancedMode", PasswordGenerator::DefaultAdvancedMode).toBool();
-}
-
-void BrowserSettings::setAdvancedMode(bool advancedMode)
-{
-    config()->set("generator/AdvancedMode", advancedMode);
-}
-
-QString BrowserSettings::passwordExcludedChars()
-{
-    return config()->get("generator/ExcludedChars", PasswordGenerator::DefaultExcludedChars).toString();
-}
-
-void BrowserSettings::setPasswordExcludedChars(const QString& chars)
-{
-    config()->set("generator/ExcludedChars", chars);
-}
-
-int BrowserSettings::passPhraseWordCount()
-{
-    return config()->get("generator/WordCount", PassphraseGenerator::DefaultWordCount).toInt();
-}
-
-void BrowserSettings::setPassPhraseWordCount(int wordCount)
-{
-    config()->set("generator/WordCount", wordCount);
-}
-
-QString BrowserSettings::passPhraseWordSeparator()
-{
-    return config()->get("generator/WordSeparator", PassphraseGenerator::DefaultSeparator).toString();
-}
-
-void BrowserSettings::setPassPhraseWordSeparator(const QString& separator)
-{
-    config()->set("generator/WordSeparator", separator);
-}
-
-int BrowserSettings::generatorType()
-{
-    return config()->get("generator/Type", 0).toInt();
-}
-
-void BrowserSettings::setGeneratorType(int type)
-{
-    config()->set("generator/Type", type);
-}
-
-bool BrowserSettings::passwordEveryGroup()
-{
-    return config()->get("generator/EnsureEvery", PasswordGenerator::DefaultFromEveryGroup).toBool();
-}
-
-void BrowserSettings::setPasswordEveryGroup(bool everyGroup)
-{
-    config()->get("generator/EnsureEvery", everyGroup);
-}
-
-bool BrowserSettings::passwordExcludeAlike()
-{
-    return config()->get("generator/ExcludeAlike", PasswordGenerator::DefaultLookAlike).toBool();
-}
-
-void BrowserSettings::setPasswordExcludeAlike(bool excludeAlike)
-{
-    config()->set("generator/ExcludeAlike", excludeAlike);
-}
-
-int BrowserSettings::passwordLength()
-{
-    return config()->get("generator/Length", PasswordGenerator::DefaultLength).toInt();
-}
-
-void BrowserSettings::setPasswordLength(int length)
-{
-    config()->set("generator/Length", length);
-    m_passwordGenerator.setLength(length);
-}
-
-PasswordGenerator::CharClasses BrowserSettings::passwordCharClasses()
-{
-    PasswordGenerator::CharClasses classes;
-    if (passwordUseLowercase()) {
-        classes |= PasswordGenerator::LowerLetters;
+#ifndef Q_OS_WIN
+    auto homePath = QDir::homePath();
+    if (location.startsWith(homePath)) {
+        location.replace(homePath, "~");
     }
-    if (passwordUseUppercase()) {
-        classes |= PasswordGenerator::UpperLetters;
-    }
-    if (passwordUseNumbers()) {
-        classes |= PasswordGenerator::Numbers;
-    }
-    if (passwordUseSpecial()) {
-        classes |= PasswordGenerator::SpecialCharacters;
-    }
-    if (passwordUseBraces()) {
-        classes |= PasswordGenerator::Braces;
-    }
-    if (passwordUsePunctuation()) {
-        classes |= PasswordGenerator::Punctuation;
-    }
-    if (passwordUseQuotes()) {
-        classes |= PasswordGenerator::Quotes;
-    }
-    if (passwordUseDashes()) {
-        classes |= PasswordGenerator::Dashes;
-    }
-    if (passwordUseMath()) {
-        classes |= PasswordGenerator::Math;
-    }
-    if (passwordUseLogograms()) {
-        classes |= PasswordGenerator::Logograms;
-    }
-    if (passwordUseEASCII()) {
-        classes |= PasswordGenerator::EASCII;
-    }
-    return classes;
+#endif
+
+    return location;
 }
 
-PasswordGenerator::GeneratorFlags BrowserSettings::passwordGeneratorFlags()
+QString BrowserSettings::replaceTildeHomePath(QString location)
 {
-    PasswordGenerator::GeneratorFlags flags;
-    if (passwordExcludeAlike()) {
-        flags |= PasswordGenerator::ExcludeLookAlike;
+#ifndef Q_OS_WIN
+    auto homePath = QDir::homePath();
+    if (location.startsWith("~")) {
+        location.replace("~", homePath);
     }
-    if (passwordEveryGroup()) {
-        flags |= PasswordGenerator::CharFromEveryGroup;
-    }
-    return flags;
-}
+#endif
 
-QJsonObject BrowserSettings::generatePassword()
-{
-    QJsonObject password;
-    if (generatorType() == 0) {
-        m_passwordGenerator.setLength(passwordLength());
-        m_passwordGenerator.setCharClasses(passwordCharClasses());
-        m_passwordGenerator.setFlags(passwordGeneratorFlags());
-        const QString pw = m_passwordGenerator.generatePassword();
-        password["entropy"] = m_passwordGenerator.estimateEntropy(pw);
-        password["password"] = pw;
-    } else {
-        m_passPhraseGenerator.setWordCount(passPhraseWordCount());
-        m_passPhraseGenerator.setWordSeparator(passPhraseWordSeparator());
-        password["entropy"] = m_passPhraseGenerator.estimateEntropy();
-        password["password"] = m_passPhraseGenerator.generatePassphrase();
-    }
-    return password;
-}
-
-void BrowserSettings::updateBinaryPaths(const QString& customProxyLocation)
-{
-    bool isProxy = supportBrowserProxy();
-    m_hostInstaller.updateBinaryPaths(isProxy, customProxyLocation);
-}
-
-bool BrowserSettings::checkIfProxyExists(QString& path)
-{
-    return m_hostInstaller.checkIfProxyExists(supportBrowserProxy(), customProxyLocation(), path);
+    return location;
 }

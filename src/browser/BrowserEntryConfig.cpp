@@ -17,9 +17,14 @@
  */
 
 #include "BrowserEntryConfig.h"
+
 #include "core/Entry.h"
-#include "core/EntryAttributes.h"
-#include <QtCore>
+#include "core/Global.h"
+#include "core/Tools.h"
+
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QVariant>
 
 static const char KEEPASSXCBROWSER_NAME[] = "KeePassXC-Browser Settings";
 
@@ -30,22 +35,22 @@ BrowserEntryConfig::BrowserEntryConfig(QObject* parent)
 
 QStringList BrowserEntryConfig::allowedHosts() const
 {
-    return m_allowedHosts.toList();
+    return m_allowedHosts.values();
 }
 
 void BrowserEntryConfig::setAllowedHosts(const QStringList& allowedHosts)
 {
-    m_allowedHosts = allowedHosts.toSet();
+    m_allowedHosts = Tools::asSet(allowedHosts);
 }
 
 QStringList BrowserEntryConfig::deniedHosts() const
 {
-    return m_deniedHosts.toList();
+    return m_deniedHosts.values();
 }
 
 void BrowserEntryConfig::setDeniedHosts(const QStringList& deniedHosts)
 {
-    m_deniedHosts = deniedHosts.toSet();
+    m_deniedHosts = Tools::asSet(deniedHosts);
 }
 
 bool BrowserEntryConfig::isAllowed(const QString& host) const
@@ -101,7 +106,7 @@ bool BrowserEntryConfig::load(const Entry* entry)
 
 void BrowserEntryConfig::save(Entry* entry)
 {
-    QVariantMap v = qo2qv(this);
+    QVariantMap v = Tools::qo2qvm(this);
     QJsonObject o = QJsonObject::fromVariantMap(v);
     QByteArray json = QJsonDocument(o).toJson(QJsonDocument::Compact);
     entry->customData()->set(KEEPASSXCBROWSER_NAME, json);

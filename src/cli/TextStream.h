@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 #ifndef KEEPASSXC_TEXTSTREAM_H
 #define KEEPASSXC_TEXTSTREAM_H
 
+#include <QIODevice>
 #include <QTextStream>
 
 /**
@@ -42,6 +43,8 @@ public:
     explicit TextStream(QString* string, QIODevice::OpenMode openMode = QIODevice::ReadWrite);
     explicit TextStream(QByteArray* array, QIODevice::OpenMode openMode = QIODevice::ReadWrite);
     explicit TextStream(const QByteArray& array, QIODevice::OpenMode openMode = QIODevice::ReadOnly);
+
+    void write(const char* str);
 
 private:
     void detectCodec();

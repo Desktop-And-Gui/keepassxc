@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -21,11 +21,11 @@
 
 #include <QList>
 #include <QSharedPointer>
-#include <QString>
 
-#include "crypto/kdf/Kdf.h"
-#include "keys/ChallengeResponseKey.h"
 #include "keys/Key.h"
+
+class Kdf;
+class ChallengeResponseKey;
 
 class CompositeKey : public Key
 {
@@ -38,17 +38,25 @@ public:
     bool isEmpty() const;
 
     QByteArray rawKey() const override;
-    QByteArray rawKey(const QByteArray* transformSeed, bool* ok = nullptr) const;
-    Q_REQUIRED_RESULT bool transform(const Kdf& kdf, QByteArray& result) const;
-    bool challenge(const QByteArray& seed, QByteArray& result) const;
+    void setRawKey(const QByteArray& data) override;
+
+    Q_REQUIRED_RESULT bool transform(const Kdf& kdf, QByteArray& result, QString* error = nullptr) const;
+    bool challenge(const QByteArray& seed, QByteArray& result, QString* error = nullptr) const;
 
     void addKey(const QSharedPointer<Key>& key);
+    QSharedPointer<Key> getKey(const QUuid keyType) const;
+    QSharedPointer<ChallengeResponseKey> getChallengeResponseKey(const QUuid keyType) const;
     const QList<QSharedPointer<Key>>& keys() const;
 
     void addChallengeResponseKey(const QSharedPointer<ChallengeResponseKey>& key);
     const QList<QSharedPointer<ChallengeResponseKey>>& challengeResponseKeys() const;
 
+    QByteArray serialize() const override;
+    void deserialize(const QByteArray& data) override;
+
 private:
+    QByteArray rawKey(const QByteArray* transformSeed, bool* ok = nullptr, QString* error = nullptr) const;
+
     QList<QSharedPointer<Key>> m_keys;
     QList<QSharedPointer<ChallengeResponseKey>> m_challengeResponseKeys;
 };

@@ -15,18 +15,14 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cstdlib>
-#include <stdio.h>
-
 #include "RemoveGroup.h"
 
-#include "cli/TextStream.h"
-#include "cli/Utils.h"
-#include "core/Database.h"
-#include "core/Entry.h"
+#include "Utils.h"
+#include "core/Global.h"
 #include "core/Group.h"
 #include "core/Metadata.h"
-#include "core/Tools.h"
+
+#include <QCommandLineParser>
 
 RemoveGroup::RemoveGroup()
 {
@@ -35,27 +31,24 @@ RemoveGroup::RemoveGroup()
     positionalArguments.append({QString("group"), QObject::tr("Path of the group to remove."), QString("")});
 }
 
-RemoveGroup::~RemoveGroup()
-{
-}
+RemoveGroup::~RemoveGroup() = default;
 
 int RemoveGroup::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
-    bool quiet = parser->isSet(Command::QuietOption);
-    QString groupPath = parser->positionalArguments().at(1);
+    auto& out = parser->isSet(Command::QuietOption) ? Utils::DEVNULL : Utils::STDOUT;
+    auto& err = Utils::STDERR;
 
-    TextStream outputTextStream(quiet ? Utils::DEVNULL : Utils::STDOUT, QIODevice::WriteOnly);
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    QString groupPath = parser->positionalArguments().at(1);
 
     // Recursive option means were looking for a group to remove.
     QPointer<Group> group = database->rootGroup()->findGroupByPath(groupPath);
     if (!group) {
-        errorTextStream << QObject::tr("Group %1 not found.").arg(groupPath) << endl;
+        err << QObject::tr("Group %1 not found.").arg(groupPath) << Qt::endl;
         return EXIT_FAILURE;
     }
 
     if (group == database->rootGroup()) {
-        errorTextStream << QObject::tr("Cannot remove root group from database.") << endl;
+        err << QObject::tr("Cannot remove root group from database.") << Qt::endl;
         return EXIT_FAILURE;
     }
 
@@ -69,15 +62,15 @@ int RemoveGroup::executeWithDatabase(QSharedPointer<Database> database, QSharedP
     };
 
     QString errorMessage;
-    if (!database->save(&errorMessage, true, false)) {
-        errorTextStream << QObject::tr("Unable to save database to file: %1").arg(errorMessage) << endl;
+    if (!database->save(Database::Atomic, {}, &errorMessage)) {
+        err << QObject::tr("Unable to save database to file: %1").arg(errorMessage) << Qt::endl;
         return EXIT_FAILURE;
     }
 
     if (recycled) {
-        outputTextStream << QObject::tr("Successfully recycled group %1.").arg(groupPath) << endl;
+        out << QObject::tr("Successfully recycled group %1.").arg(groupPath) << Qt::endl;
     } else {
-        outputTextStream << QObject::tr("Successfully deleted group %1.").arg(groupPath) << endl;
+        out << QObject::tr("Successfully deleted group %1.").arg(groupPath) << Qt::endl;
     }
 
     return EXIT_SUCCESS;

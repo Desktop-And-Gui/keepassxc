@@ -18,13 +18,11 @@
 #include "OpData01.h"
 #include "OpVaultReader.h"
 
-#include "core/Group.h"
-#include "core/Tools.h"
+#include "core/Entry.h"
 
 #include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QUuid>
 
 /*!
  * This will \c qCritical() if unable to open the file for reading.
@@ -125,22 +123,8 @@ bool OpVaultReader::readAttachment(const QString& filePath,
         return false;
     }
 
-    if (!metadata.contains("contentsSize")) {
-        qWarning() << "Expected attachment metadata to contain \"contentsSize\" but nope: " << metadata;
-        return false;
-    } else if (!metadata["contentsSize"].isDouble()) {
-        qWarning() << "Expected attachment metadata to contain numeric \"contentsSize\" but nope: " << metadata;
-        return false;
-    }
-    int bytesLen = metadata["contentsSize"].toInt();
-    const QByteArray encData = file.readAll();
-    if (encData.size() < bytesLen) {
-        qCritical() << "Unable to read all of the attachment payload; wanted " << bytesLen << "but got"
-                    << encData.size();
-        return false;
-    }
-
     OpData01 att01;
+    const QByteArray encData = file.readAll();
     if (!att01.decode(encData, itemKey, itemHmacKey)) {
         qCritical() << "Unable to decipher attachment payload: " << att01.errorString();
         return false;
@@ -244,6 +228,10 @@ void OpVaultReader::fillAttachment(Entry* entry,
         } else {
             qWarning() << QString("Unexpected type of attachment \"filename\": %1").arg(attFilename.type());
         }
+    }
+    if (entry->attachments()->hasKey(attachKey)) {
+        // Prepend a random string to the attachment name to avoid collisions
+        attachKey.prepend(QString("%1_").arg(QUuid::createUuid().toString().mid(1, 5)));
     }
 
     entry->attachments()->set(attachKey, attachPayload);

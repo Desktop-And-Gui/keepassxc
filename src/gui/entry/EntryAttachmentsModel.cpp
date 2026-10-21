@@ -17,10 +17,8 @@
 
 #include "EntryAttachmentsModel.h"
 
-#include "core/Entry.h"
+#include "core/EntryAttachments.h"
 #include "core/Tools.h"
-
-#include <algorithm>
 
 EntryAttachmentsModel::EntryAttachmentsModel(QObject* parent)
     : QAbstractListModel(parent)
@@ -81,7 +79,7 @@ QVariant EntryAttachmentsModel::headerData(int section, Qt::Orientation orientat
 QVariant EntryAttachmentsModel::data(const QModelIndex& index, int role) const
 {
     if (!index.isValid()) {
-        return QVariant();
+        return {};
     }
 
     if (role == Qt::DisplayRole || role == Qt::EditRole) {
@@ -98,16 +96,47 @@ QVariant EntryAttachmentsModel::data(const QModelIndex& index, int role) const
         }
     }
 
-    return QVariant();
+    return {};
+}
+
+bool EntryAttachmentsModel::setData(const QModelIndex& index, const QVariant& value, int role)
+{
+    if (!m_readOnly && index.column() == Columns::NameColumn) {
+        const QString key = value.toString().trimmed();
+        if (key.isEmpty() || m_entryAttachments->hasKey(key)) {
+            return false;
+        }
+        m_entryAttachments->rename(keyByIndex(index), key);
+        return true;
+    }
+    return QAbstractListModel::setData(index, value, role);
+}
+
+Qt::ItemFlags EntryAttachmentsModel::flags(const QModelIndex& index) const
+{
+    Qt::ItemFlags flags = QAbstractListModel::flags(index);
+    if (!m_readOnly && index.column() == Columns::NameColumn) {
+        flags = flags | Qt::ItemIsEditable;
+    }
+    return flags;
 }
 
 QString EntryAttachmentsModel::keyByIndex(const QModelIndex& index) const
 {
     if (!index.isValid()) {
-        return QString();
+        return {};
     }
 
     return m_entryAttachments->keys().at(index.row());
+}
+
+int EntryAttachmentsModel::rowByKey(const QString& key) const
+{
+    if (!m_entryAttachments) {
+        return -1;
+    }
+
+    return m_entryAttachments->keys().indexOf(key);
 }
 
 void EntryAttachmentsModel::attachmentChange(const QString& key)
@@ -149,4 +178,9 @@ void EntryAttachmentsModel::aboutToReset()
 void EntryAttachmentsModel::reset()
 {
     endResetModel();
+}
+
+void EntryAttachmentsModel::setReadOnly(bool readOnly)
+{
+    m_readOnly = readOnly;
 }

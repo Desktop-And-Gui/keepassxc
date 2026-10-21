@@ -18,12 +18,10 @@
 #ifndef KEEPASSX_TotpExportSettingsDialog_H
 #define KEEPASSX_TotpExportSettingsDialog_H
 
-#include "core/Database.h"
-#include "core/Entry.h"
-#include "gui/DatabaseWidget.h"
 #include <QDialog>
-#include <QTimer>
-#include <QUrl>
+
+#include "core/Database.h"
+#include "gui/DatabaseWidget.h"
 
 class QVBoxLayout;
 class SquareSvgWidget;
@@ -36,7 +34,7 @@ class TotpExportSettingsDialog : public QDialog
 
 public:
     explicit TotpExportSettingsDialog(DatabaseWidget* parent = nullptr, Entry* entry = nullptr);
-    ~TotpExportSettingsDialog();
+    ~TotpExportSettingsDialog() override;
 
 private slots:
     void copyToClipboard();
@@ -48,6 +46,7 @@ private:
     QTimer* m_timer;
 
     QVBoxLayout* m_verticalLayout;
+    QStackedWidget* m_totpSvgContainerWidget;
     SquareSvgWidget* m_totpSvgWidget;
     QLabel* m_countDown;
     QLabel* m_warningLabel;

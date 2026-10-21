@@ -19,7 +19,6 @@
 #define KEEPASSX_KEEPASS1READER_H
 
 #include <QCoreApplication>
-#include <QDateTime>
 #include <QHash>
 #include <QSharedPointer>
 

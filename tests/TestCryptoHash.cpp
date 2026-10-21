@@ -16,16 +16,18 @@
  */
 
 #include "TestCryptoHash.h"
-#include "TestGlobal.h"
 
 #include "crypto/Crypto.h"
 #include "crypto/CryptoHash.h"
+
+#include <QTest>
 
 QTEST_GUILESS_MAIN(TestCryptoHash)
 
 void TestCryptoHash::initTestCase()
 {
     QVERIFY(Crypto::init());
+    QLocale::setDefault(QLocale::c());
 }
 
 void TestCryptoHash::test()

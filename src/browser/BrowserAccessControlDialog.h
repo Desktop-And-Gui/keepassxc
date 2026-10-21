@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2013 Francois Ferrand
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,11 +16,11 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef BROWSERACCESSCONTROLDIALOG_H
-#define BROWSERACCESSCONTROLDIALOG_H
+#ifndef KEEPASSXC_BROWSERACCESSCONTROLDIALOG_H
+#define KEEPASSXC_BROWSERACCESSCONTROLDIALOG_H
 
 #include <QDialog>
-#include <QScopedPointer>
+#include <QTableWidget>
 
 class Entry;
 
@@ -29,22 +29,42 @@ namespace Ui
     class BrowserAccessControlDialog;
 }
 
+enum SelectionType
+{
+    Selected,
+    NonSelected,
+    Disabled
+};
+
 class BrowserAccessControlDialog : public QDialog
 {
     Q_OBJECT
 
 public:
     explicit BrowserAccessControlDialog(QWidget* parent = nullptr);
-    ~BrowserAccessControlDialog();
+    ~BrowserAccessControlDialog() override;
 
-    void setUrl(const QString& url);
-    void setItems(const QList<Entry*>& items);
+    void setEntries(const QList<Entry*>& entriesToConfirm, const QString& urlString, bool httpAuth);
     bool remember() const;
-    void setRemember(bool r);
-    void setHTTPAuth(bool httpAuth);
+    QList<QTableWidgetItem*> getEntries(SelectionType selectionType) const;
+
+signals:
+    void disableAccess(QTableWidgetItem* item);
+
+protected:
+    void showEvent(QShowEvent* event) override;
+
+private slots:
+    void selectionChanged();
+
+private:
+    void addEntryToList(const Entry* entry, int row);
+    bool areAllDisabled() const;
+    QList<QTableWidgetItem*> getAllItems() const;
 
 private:
     QScopedPointer<Ui::BrowserAccessControlDialog> m_ui;
+    QList<Entry*> m_entriesToConfirm;
 };
 
-#endif // BROWSERACCESSCONTROLDIALOG_H
+#endif // KEEPASSXC_BROWSERACCESSCONTROLDIALOG_H

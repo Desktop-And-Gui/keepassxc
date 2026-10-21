@@ -19,162 +19,288 @@
 #include "DatabaseOpenWidget.h"
 #include "ui_DatabaseOpenWidget.h"
 
-#include "core/Config.h"
-#include "core/Database.h"
-#include "core/FilePath.h"
-#include "crypto/Random.h"
-#include "format/KeePass2Reader.h"
 #include "gui/FileDialog.h"
+#include "gui/Icons.h"
 #include "gui/MainWindow.h"
 #include "gui/MessageBox.h"
+#include "keys/ChallengeResponseKey.h"
 #include "keys/FileKey.h"
-#include "keys/PasswordKey.h"
-#include "keys/YkChallengeResponseKey.h"
-#include "touchid/TouchID.h"
+#include "keys/drivers/YubiKeyInterfaceUSB.h"
+#include "quickunlock/QuickUnlockInterface.h"
 
-#include "config-keepassx.h"
-
+#include <QCheckBox>
+#include <QCloseEvent>
 #include <QDesktopServices>
 #include <QFont>
-#include <QSharedPointer>
-#include <QtConcurrentRun>
+
+namespace
+{
+    constexpr int clearFormsDelay = 30000;
+
+    bool isQuickUnlockAvailable()
+    {
+        if (config()->get(Config::Security_QuickUnlock).toBool()) {
+            return getQuickUnlock()->isAvailable();
+        }
+        return false;
+    }
+} // namespace
 
 DatabaseOpenWidget::DatabaseOpenWidget(QWidget* parent)
     : DialogyWidget(parent)
     , m_ui(new Ui::DatabaseOpenWidget())
     , m_db(nullptr)
+    , m_deviceListener(new DeviceListener(this))
 {
     m_ui->setupUi(this);
 
     m_ui->messageWidget->setHidden(true);
 
+    m_hideTimer.setInterval(clearFormsDelay);
+    m_hideTimer.setSingleShot(true);
+    connect(&m_hideTimer, &QTimer::timeout, this, [this] {
+        // Reset the password field after being hidden for a set time
+        m_ui->editPassword->setText("");
+        m_ui->editPassword->setShowPassword(false);
+    });
+
     QFont font;
     font.setPointSize(font.pointSize() + 4);
     font.setBold(true);
     m_ui->labelHeadline->setFont(font);
-    m_ui->labelHeadline->setText(tr("Unlock KeePassXC Database"));
 
-    m_ui->comboKeyFile->lineEdit()->addAction(m_ui->keyFileClearIcon, QLineEdit::TrailingPosition);
+    m_ui->quickUnlockButton->setFont(font);
+    m_ui->quickUnlockButton->setIcon(
+        icons()->icon("fingerprint", true, palette().color(QPalette::Active, QPalette::HighlightedText)));
+    m_ui->quickUnlockButton->setIconSize({32, 32});
 
-    m_ui->buttonTogglePassword->setIcon(filePath()->onOffIcon("actions", "password-show"));
-    connect(m_ui->buttonTogglePassword, SIGNAL(toggled(bool)), m_ui->editPassword, SLOT(setShowPassword(bool)));
     connect(m_ui->buttonBrowseFile, SIGNAL(clicked()), SLOT(browseKeyFile()));
 
+    auto okBtn = m_ui->buttonBox->button(QDialogButtonBox::Ok);
+    okBtn->setText(tr("Unlock"));
+    okBtn->setDefault(true);
     connect(m_ui->buttonBox, SIGNAL(accepted()), SLOT(openDatabase()));
     connect(m_ui->buttonBox, SIGNAL(rejected()), SLOT(reject()));
 
-    m_ui->hardwareKeyLabelHelp->setIcon(filePath()->icon("actions", "system-help").pixmap(QSize(12, 12)));
-    connect(m_ui->hardwareKeyLabelHelp, SIGNAL(clicked(bool)), SLOT(openHardwareKeyHelp()));
+    m_ui->addKeyFileLinkLabel->setText(QStringLiteral("<a href=\"#\" style=\"text-decoration: underline\">%1</a>")
+                                           .arg(tr("I have a key file").toHtmlEscaped()));
+    connect(m_ui->addKeyFileLinkLabel, &QLabel::linkActivated, this, &DatabaseOpenWidget::browseKeyFile);
+    connect(m_ui->keyFileLineEdit, &PasswordWidget::textChanged, this, [&](const QString& text) {
+        bool state = !text.isEmpty();
+        m_ui->addKeyFileLinkLabel->setVisible(!state);
+        m_ui->selectKeyFileComponent->setVisible(state);
+    });
+    connect(m_ui->useHardwareKeyCheckBox, &QCheckBox::toggled, m_ui->hardwareKeyCombo, &QComboBox::setEnabled);
 
-    connect(m_ui->comboKeyFile->lineEdit(), SIGNAL(textChanged(QString)), SLOT(handleKeyFileComboEdited()));
-    connect(m_ui->comboKeyFile, SIGNAL(currentIndexChanged(int)), SLOT(handleKeyFileComboChanged()));
-    m_ui->keyFileClearIcon->setIcon(filePath()->icon("actions", "edit-clear-locationbar-rtl"));
-    m_ui->keyFileClearIcon->setVisible(false);
-    connect(m_ui->keyFileClearIcon, SIGNAL(triggered(bool)), SLOT(clearKeyFileEdit()));
+    m_ui->selectKeyFileComponent->setVisible(false);
+    toggleHardwareKeyComponent(false);
 
-#ifdef WITH_XC_YUBIKEY
-    m_ui->yubikeyProgress->setVisible(false);
-    QSizePolicy sp = m_ui->yubikeyProgress->sizePolicy();
+    QSizePolicy sp = m_ui->hardwareKeyProgress->sizePolicy();
     sp.setRetainSizeWhenHidden(true);
-    m_ui->yubikeyProgress->setSizePolicy(sp);
+    m_ui->hardwareKeyProgress->setSizePolicy(sp);
 
-    connect(m_ui->buttonRedetectYubikey, SIGNAL(clicked()), SLOT(pollYubikey()));
-#else
-    m_ui->hardwareKeyLabel->setVisible(false);
-    m_ui->hardwareKeyLabelHelp->setVisible(false);
-    m_ui->buttonRedetectYubikey->setVisible(false);
-    m_ui->comboChallengeResponse->setVisible(false);
-    m_ui->yubikeyProgress->setVisible(false);
-#endif
+    connect(m_deviceListener, &DeviceListener::devicePlugged, this, [this] { pollHardwareKey(false, 500); });
+    connect(YubiKey::instance(), SIGNAL(detectComplete(bool)), SLOT(hardwareKeyResponse(bool)), Qt::QueuedConnection);
 
-#ifdef Q_OS_MACOS
-    // add random padding to layouts to align widgets properly
-    m_ui->dialogButtonsLayout->setContentsMargins(10, 0, 15, 0);
-    m_ui->gridLayout->setContentsMargins(10, 0, 0, 0);
-#endif
+    connect(YubiKey::instance(), &YubiKey::userInteractionRequest, this, [this] {
+        // Show the press notification if we are in an independent window (e.g., DatabaseOpenDialog)
+        if (window() != getMainWindow()) {
+            m_ui->messageWidget->showMessage(tr("Please present or touch your YubiKey to continue…"),
+                                             MessageWidget::Information,
+                                             MessageWidget::DisableAutoHide);
+        }
+    });
+    connect(YubiKey::instance(), &YubiKey::challengeCompleted, this, [this] { m_ui->messageWidget->hide(); });
 
-#ifndef WITH_XC_TOUCHID
-    m_ui->touchIDContainer->setVisible(false);
-#else
-    if (!TouchID::getInstance().isAvailable()) {
-        m_ui->checkTouchID->setVisible(false);
+    m_ui->noHardwareKeysFoundLabel->setVisible(false);
+    m_ui->refreshHardwareKeys->setIcon(icons()->icon("yubikey-refresh", true));
+    connect(m_ui->refreshHardwareKeys, &QPushButton::clicked, this, [this] { pollHardwareKey(true); });
+    m_hideNoHardwareKeysFoundTimer.setInterval(2000);
+    connect(&m_hideNoHardwareKeysFoundTimer, &QTimer::timeout, this, [this] {
+        m_ui->noHardwareKeysFoundLabel->setVisible(false);
+    });
+
+    // QuickUnlock actions
+    connect(m_ui->quickUnlockButton, &QPushButton::pressed, this, [this] { openDatabase(); });
+    connect(m_ui->resetQuickUnlockButton, &QPushButton::pressed, this, [this] { resetQuickUnlock(); });
+    m_ui->resetQuickUnlockButton->setShortcut(Qt::Key_Escape);
+}
+
+DatabaseOpenWidget::~DatabaseOpenWidget() = default;
+
+void DatabaseOpenWidget::toggleHardwareKeyComponent(bool state)
+{
+    m_ui->hardwareKeyProgress->setVisible(false);
+    m_ui->hardwareKeyComponent->setVisible(state);
+    m_ui->hardwareKeyCombo->setVisible(state && m_ui->hardwareKeyCombo->count() != 1);
+
+    m_ui->noHardwareKeysFoundLabel->setVisible(!state && m_manualHardwareKeyRefresh);
+    m_ui->noHardwareKeysFoundLabel->setText(YubiKey::instance()->connectedKeys() > 0
+                                                ? tr("Hardware keys found, but no slots are configured.")
+                                                : tr("No hardware keys found."));
+
+    if (!state) {
+        m_ui->useHardwareKeyCheckBox->setChecked(false);
     }
-#endif
-}
-
-DatabaseOpenWidget::~DatabaseOpenWidget()
-{
-}
-
-void DatabaseOpenWidget::showEvent(QShowEvent* event)
-{
-    DialogyWidget::showEvent(event);
-    m_ui->editPassword->setFocus();
-
-#ifdef WITH_XC_YUBIKEY
-    // showEvent() may be called twice, so make sure we are only polling once
-    if (!m_yubiKeyBeingPolled) {
-        // clang-format off
-        connect(YubiKey::instance(), SIGNAL(detected(int,bool)), SLOT(yubikeyDetected(int,bool)), Qt::QueuedConnection);
-        connect(YubiKey::instance(), SIGNAL(detectComplete()), SLOT(yubikeyDetectComplete()), Qt::QueuedConnection);
-        connect(YubiKey::instance(), SIGNAL(notFound()), SLOT(noYubikeyFound()), Qt::QueuedConnection);
-        // clang-format on
-
-        pollYubikey();
-        m_yubiKeyBeingPolled = true;
+    if (m_ui->hardwareKeyCombo->count() == 1) {
+        m_ui->useHardwareKeyCheckBox->setText(
+            tr("Use hardware key [Serial: %1]")
+                .arg(m_ui->hardwareKeyCombo->itemData(m_ui->hardwareKeyCombo->currentIndex())
+                         .value<YubiKeySlot>()
+                         .first));
+    } else {
+        m_ui->useHardwareKeyCheckBox->setText(tr("Use hardware key"));
     }
-#endif
 }
-
-void DatabaseOpenWidget::hideEvent(QHideEvent* event)
+void DatabaseOpenWidget::closeDatabase()
 {
-    DialogyWidget::hideEvent(event);
+    int closeWarningInterval = 3000;
 
-#ifdef WITH_XC_YUBIKEY
-    // Don't listen to any Yubikey events if we are hidden
-    disconnect(YubiKey::instance(), nullptr, this, nullptr);
-    m_yubiKeyBeingPolled = false;
-#endif
+    if (!m_triedToQuit && window() == getMainWindow()) {
+        m_triedToQuit = true;
+        m_ui->messageWidget->showMessage(
+            tr("Press ESC again to close this database"), MessageWidget::Warning, closeWarningInterval);
 
-    if (isVisible()) {
+        QTimer::singleShot(closeWarningInterval, this, [this]() { m_triedToQuit = false; });
         return;
     }
+    reject();
+}
 
-    clearForms();
+void DatabaseOpenWidget::keyPressEvent(QKeyEvent* event)
+{
+    if (event->key() == Qt::Key_Escape) {
+        closeDatabase();
+    } else {
+        DialogyWidget::keyPressEvent(event);
+    }
+}
+
+bool DatabaseOpenWidget::event(QEvent* event)
+{
+    bool ret = DialogyWidget::event(event);
+    auto type = event->type();
+
+    if (type == QEvent::Show || type == QEvent::WindowActivate) {
+        if (isOnQuickUnlockScreen() && (m_db.isNull() || !canPerformQuickUnlock())) {
+            resetQuickUnlock();
+        }
+        toggleQuickUnlockScreen();
+
+        if (type == QEvent::Show) {
+#ifdef Q_OS_WIN
+            m_deviceListener->registerHotplugCallback(true,
+                                                      true,
+                                                      YubiKeyInterfaceUSB::YUBICO_USB_VID,
+                                                      DeviceListener::MATCH_ANY,
+                                                      &DeviceListenerWin::DEV_CLS_KEYBOARD);
+            m_deviceListener->registerHotplugCallback(true,
+                                                      true,
+                                                      YubiKeyInterfaceUSB::ONLYKEY_USB_VID,
+                                                      DeviceListener::MATCH_ANY,
+                                                      &DeviceListenerWin::DEV_CLS_KEYBOARD);
+#else
+            m_deviceListener->registerHotplugCallback(true, true, YubiKeyInterfaceUSB::YUBICO_USB_VID);
+            m_deviceListener->registerHotplugCallback(true, true, YubiKeyInterfaceUSB::ONLYKEY_USB_VID);
+#endif
+        }
+
+        if (isVisible()) {
+            m_hideTimer.stop();
+            pollHardwareKey();
+        }
+
+        ret = true;
+    } else if (type == QEvent::Hide || type == QEvent::WindowDeactivate) {
+        // Schedule form clearing if we are hidden
+        if (!m_hideTimer.isActive()) {
+            m_hideTimer.start();
+        }
+
+        if (type == QEvent::Hide) {
+            m_deviceListener->deregisterAllHotplugCallbacks();
+        }
+
+        ret = true;
+    }
+
+    return ret;
+}
+
+bool DatabaseOpenWidget::unlockingDatabase()
+{
+    return m_unlockingDatabase;
+}
+
+void DatabaseOpenWidget::showMessage(const QString& text, MessageWidget::MessageType type, int autoHideTimeout)
+{
+    m_ui->messageWidget->showMessage(text, type, autoHideTimeout);
 }
 
 void DatabaseOpenWidget::load(const QString& filename)
 {
+    clearForms();
+
     m_filename = filename;
+
+    // Read public headers
+    QString error;
+    m_db.reset(new Database());
+    m_db->open(m_filename, nullptr, &error);
+
     m_ui->fileNameLabel->setRawText(m_filename);
 
-    m_ui->comboKeyFile->addItem(tr("Select file..."), -1);
-    m_ui->comboKeyFile->setCurrentIndex(0);
-    m_ui->keyFileClearIcon->setVisible(false);
-    m_keyFileComboEdited = false;
+    // Set the public name if defined
+    auto label = tr("Unlock KeePassXC Database");
+    if (!m_db->publicName().isEmpty()) {
+        label.append(QString(": %1").arg(m_db->publicName()));
+    }
+    m_ui->labelHeadline->setText(label);
 
-    if (config()->get("RememberLastKeyFiles").toBool()) {
-        QHash<QString, QVariant> lastKeyFiles = config()->get("LastKeyFiles").toHash();
+    // Apply the public color to the central unlock stack if defined
+    auto color = m_db->publicColor();
+    if (!color.isEmpty()) {
+        m_ui->centralStack->setStyleSheet(QString("QStackedWidget {border: 4px solid %1}").arg(color));
+    } else {
+        m_ui->centralStack->setStyleSheet("");
+    }
+
+    // Show the database icon if defined
+    auto iconIndex = m_db->publicIcon();
+    if (iconIndex >= 0 && iconIndex < databaseIcons()->count()) {
+        m_ui->dbIconLabel->setPixmap(databaseIcons()->icon(iconIndex, IconSize::Large));
+        m_ui->dbIconLabel->setVisible(true);
+    } else {
+        m_ui->dbIconLabel->setPixmap({});
+        m_ui->dbIconLabel->setVisible(false);
+    }
+
+    if (config()->get(Config::RememberLastKeyFiles).toBool()) {
+        auto lastKeyFiles = config()->get(Config::LastKeyFiles).toHash();
         if (lastKeyFiles.contains(m_filename)) {
-            m_ui->comboKeyFile->addItem(lastKeyFiles[m_filename].toString());
-            m_ui->comboKeyFile->setCurrentIndex(1);
+            m_ui->keyFileLineEdit->setText(lastKeyFiles[m_filename].toString());
         }
     }
 
-    QHash<QString, QVariant> useTouchID = config()->get("UseTouchID").toHash();
-    m_ui->checkTouchID->setChecked(useTouchID.value(m_filename, false).toBool());
+    toggleQuickUnlockScreen();
 
-    m_ui->editPassword->setFocus();
+    // Do initial auto-poll
+    pollHardwareKey();
 }
 
 void DatabaseOpenWidget::clearForms()
 {
+    setUserInteractionLock(false);
     m_ui->editPassword->setText("");
-    m_ui->comboKeyFile->clear();
-    m_ui->comboKeyFile->setEditText("");
-    m_ui->checkTouchID->setChecked(false);
-    m_ui->buttonTogglePassword->setChecked(false);
-    m_db.reset();
+    m_ui->editPassword->setShowPassword(false);
+    m_ui->keyFileLineEdit->clear();
+    m_ui->keyFileLineEdit->setShowPassword(false);
+    m_ui->keyFileLineEdit->setClearButtonEnabled(true);
+    m_ui->hardwareKeyCombo->clear();
+    toggleHardwareKeyComponent(false);
+    toggleQuickUnlockScreen();
+
+    m_db.reset(new Database(m_filename));
 }
 
 QSharedPointer<Database> DatabaseOpenWidget::database()
@@ -182,32 +308,82 @@ QSharedPointer<Database> DatabaseOpenWidget::database()
     return m_db;
 }
 
+QString DatabaseOpenWidget::filename()
+{
+    return m_filename;
+}
+
 void DatabaseOpenWidget::enterKey(const QString& pw, const QString& keyFile)
 {
+    if (unlockingDatabase()) {
+        qWarning("Ignoring unlock request for %s because of running unlock action.", qPrintable(m_filename));
+        return;
+    }
+
     m_ui->editPassword->setText(pw);
-    m_ui->comboKeyFile->setCurrentIndex(-1);
-    m_ui->comboKeyFile->setEditText(keyFile);
+    m_ui->keyFileLineEdit->setText(keyFile);
+    m_blockQuickUnlock = true;
     openDatabase();
 }
 
 void DatabaseOpenWidget::openDatabase()
 {
-    QSharedPointer<CompositeKey> masterKey = databaseKey();
-    if (!masterKey) {
+    // Cache this variable for future use then reset
+    bool blockQuickUnlock = m_blockQuickUnlock || isOnQuickUnlockScreen();
+    m_blockQuickUnlock = false;
+
+    setUserInteractionLock(true);
+    m_ui->editPassword->setShowPassword(false);
+    m_ui->messageWidget->hide();
+    QCoreApplication::processEvents();
+
+    const auto databaseKey = buildDatabaseKey();
+    if (!databaseKey) {
+        setUserInteractionLock(false);
         return;
     }
 
-    m_ui->editPassword->setShowPassword(false);
-    m_ui->buttonTogglePassword->setChecked(false);
-    QCoreApplication::processEvents();
-
-    m_db.reset(new Database());
     QString error;
-    QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
-    bool ok = m_db->open(m_filename, masterKey, &error, false);
-    QApplication::restoreOverrideCursor();
-    if (!ok) {
-        if (m_ui->editPassword->text().isEmpty() && !m_retryUnlockWithEmptyPassword) {
+    m_db.reset(new Database());
+    bool ok = m_db->open(m_filename, databaseKey, &error);
+
+    if (ok) {
+        // Warn user about minor version mismatch to halt loading if necessary
+        if (m_db->hasMinorVersionMismatch()) {
+            QScopedPointer<QMessageBox> msgBox(new QMessageBox(this));
+            msgBox->setIcon(QMessageBox::Warning);
+            msgBox->setWindowTitle(tr("Database Version Mismatch"));
+            msgBox->setText(tr("The database you are trying to open was most likely\n"
+                               "created by a newer version of KeePassXC.\n\n"
+                               "You can try to open it anyway, but it may be incomplete\n"
+                               "and saving any changes may incur data loss.\n\n"
+                               "We recommend you update your KeePassXC installation."));
+            auto btn = msgBox->addButton(tr("Open database anyway"), QMessageBox::ButtonRole::AcceptRole);
+            msgBox->setDefaultButton(btn);
+            msgBox->addButton(QMessageBox::Cancel);
+            msgBox->layout()->setSizeConstraint(QLayout::SetMinimumSize);
+            msgBox->exec();
+            if (msgBox->clickedButton() != btn) {
+                m_db.reset(new Database());
+                m_db->open(m_filename, nullptr, &error);
+
+                m_ui->messageWidget->showMessage(tr("Database unlock canceled."), MessageWidget::MessageType::Error);
+                setUserInteractionLock(false);
+                return;
+            }
+        }
+
+        // Save Quick Unlock credentials if available
+        if (!blockQuickUnlock && isQuickUnlockAvailable()) {
+            auto keyData = databaseKey->serialize();
+            getQuickUnlock()->setKey(m_db->publicUuid(), keyData);
+            m_ui->messageWidget->hideMessage();
+        }
+
+        emit dialogFinished(true);
+        clearForms();
+    } else {
+        if (!isOnQuickUnlockScreen() && m_ui->editPassword->text().isEmpty() && !m_retryUnlockWithEmptyPassword) {
             QScopedPointer<QMessageBox> msgBox(new QMessageBox(this));
             msgBox->setIcon(QMessageBox::Critical);
             msgBox->setWindowTitle(tr("Unlock failed and no password given"));
@@ -222,134 +398,102 @@ void DatabaseOpenWidget::openDatabase()
 
             if (msgBox->clickedButton() == btn) {
                 m_retryUnlockWithEmptyPassword = true;
+                setUserInteractionLock(false);
                 openDatabase();
                 return;
             }
         }
+
+        setUserInteractionLock(false);
+
         m_retryUnlockWithEmptyPassword = false;
         m_ui->messageWidget->showMessage(error, MessageWidget::MessageType::Error);
-        return;
-    }
 
-    if (m_db) {
-#ifdef WITH_XC_TOUCHID
-        QHash<QString, QVariant> useTouchID = config()->get("UseTouchID").toHash();
-
-        // check if TouchID can & should be used to unlock the database next time
-        if (m_ui->checkTouchID->isChecked() && TouchID::getInstance().isAvailable()) {
-            // encrypt and store key blob
-            if (TouchID::getInstance().storeKey(m_filename, PasswordKey(m_ui->editPassword->text()).rawKey())) {
-                useTouchID.insert(m_filename, true);
-            }
-        } else {
-            // when TouchID not available or unchecked, reset for the current database
-            TouchID::getInstance().reset(m_filename);
-            useTouchID.insert(m_filename, false);
+        if (!isOnQuickUnlockScreen()) {
+            // Focus on the password field and select the input for easy retry
+            m_ui->editPassword->selectAll();
+            m_ui->editPassword->setFocus();
         }
-
-        config()->set("UseTouchID", useTouchID);
-#endif
-
-        if (m_ui->messageWidget->isVisible()) {
-            m_ui->messageWidget->animatedHide();
-        }
-        emit dialogFinished(true);
-    } else {
-        m_ui->messageWidget->showMessage(error, MessageWidget::Error);
-        m_ui->editPassword->setText("");
-
-#ifdef WITH_XC_TOUCHID
-        // unable to unlock database, reset TouchID for the current database
-        TouchID::getInstance().reset(m_filename);
-#endif
     }
 }
 
-QSharedPointer<CompositeKey> DatabaseOpenWidget::databaseKey()
+QSharedPointer<CompositeKey> DatabaseOpenWidget::buildDatabaseKey()
 {
-    auto masterKey = QSharedPointer<CompositeKey>::create();
+    auto databaseKey = QSharedPointer<CompositeKey>::create();
+
+    if (!m_db.isNull() && canPerformQuickUnlock()) {
+        // try to retrieve the stored password using Windows Hello
+        QByteArray keyData;
+        if (!getQuickUnlock()->getKey(m_db->publicUuid(), keyData)) {
+            m_ui->messageWidget->showMessage(
+                tr("Failed to authenticate with Quick Unlock: %1").arg(getQuickUnlock()->errorString()),
+                MessageWidget::Error);
+            return {};
+        }
+        databaseKey->setRawKey(keyData);
+        return databaseKey;
+    }
 
     if (!m_ui->editPassword->text().isEmpty() || m_retryUnlockWithEmptyPassword) {
-        masterKey->addKey(QSharedPointer<PasswordKey>::create(m_ui->editPassword->text()));
+        databaseKey->addKey(QSharedPointer<PasswordKey>::create(m_ui->editPassword->text()));
     }
 
-#ifdef WITH_XC_TOUCHID
-    // check if TouchID is available and enabled for unlocking the database
-    if (m_ui->checkTouchID->isChecked() && TouchID::getInstance().isAvailable()
-        && m_ui->editPassword->text().isEmpty()) {
-        // clear empty password from composite key
-        masterKey->clear();
-
-        // try to get, decrypt and use PasswordKey
-        QSharedPointer<QByteArray> passwordKey = TouchID::getInstance().getKey(m_filename);
-        if (passwordKey != NULL) {
-            // check if the user cancelled the operation
-            if (passwordKey.isNull())
-                return QSharedPointer<CompositeKey>();
-
-            masterKey->addKey(PasswordKey::fromRawKey(*passwordKey));
-        }
-    }
-#endif
-
-    QHash<QString, QVariant> lastKeyFiles = config()->get("LastKeyFiles").toHash();
+    auto lastKeyFiles = config()->get(Config::LastKeyFiles).toHash();
     lastKeyFiles.remove(m_filename);
 
     auto key = QSharedPointer<FileKey>::create();
-    QString keyFilename = m_ui->comboKeyFile->currentText();
-    if (!m_ui->comboKeyFile->currentText().isEmpty() && m_keyFileComboEdited) {
+    QString keyFilename = m_ui->keyFileLineEdit->text();
+    if (!keyFilename.isEmpty()) {
         QString errorMsg;
         if (!key->load(keyFilename, &errorMsg)) {
             m_ui->messageWidget->showMessage(tr("Failed to open key file: %1").arg(errorMsg), MessageWidget::Error);
             return {};
         }
-        if (key->type() != FileKey::Hashed && !config()->get("Messages/NoLegacyKeyFileWarning").toBool()) {
+        if (key->type() != FileKey::KeePass2XMLv2 && key->type() != FileKey::Hashed
+            && !config()->get(Config::Messages_NoLegacyKeyFileWarning).toBool()) {
             QMessageBox legacyWarning;
-            legacyWarning.setWindowTitle(tr("Legacy key file format"));
-            legacyWarning.setText(tr("You are using a legacy key file format which may become\n"
-                                     "unsupported in the future.\n\n"
-                                     "Please consider generating a new key file."));
+            legacyWarning.setWindowTitle(tr("Old key file format"));
+            legacyWarning.setText(tr("You are using an old key file format which KeePassXC may<br>"
+                                     "stop supporting in the future.<br><br>"
+                                     "Please consider generating a new key file by going to:<br>"
+                                     "<strong>Database &gt; Database Security &gt; Change Key File.</strong><br>"));
             legacyWarning.setIcon(QMessageBox::Icon::Warning);
             legacyWarning.addButton(QMessageBox::Ok);
             legacyWarning.setDefaultButton(QMessageBox::Ok);
             legacyWarning.setCheckBox(new QCheckBox(tr("Don't show this warning again")));
 
-            connect(legacyWarning.checkBox(), &QCheckBox::stateChanged, [](int state) {
-                config()->set("Messages/NoLegacyKeyFileWarning", state == Qt::CheckState::Checked);
+            connect(legacyWarning.checkBox(), &QCheckBox::toggled, this, [](bool checked) {
+                config()->set(Config::Messages_NoLegacyKeyFileWarning, checked);
             });
 
             legacyWarning.exec();
         }
-        masterKey->addKey(key);
-        lastKeyFiles[m_filename] = keyFilename;
+        databaseKey->addKey(key);
+        lastKeyFiles.insert(m_filename, keyFilename);
     }
 
-    if (config()->get("RememberLastKeyFiles").toBool()) {
-        config()->set("LastKeyFiles", lastKeyFiles);
+    if (config()->get(Config::RememberLastKeyFiles).toBool()) {
+        config()->set(Config::LastKeyFiles, lastKeyFiles);
     }
 
-#ifdef WITH_XC_YUBIKEY
-    QHash<QString, QVariant> lastChallengeResponse = config()->get("LastChallengeResponse").toHash();
+    auto lastChallengeResponse = config()->get(Config::LastChallengeResponse).toHash();
     lastChallengeResponse.remove(m_filename);
 
-    int selectionIndex = m_ui->comboChallengeResponse->currentIndex();
-    if (selectionIndex > 0) {
-        int comboPayload = m_ui->comboChallengeResponse->itemData(selectionIndex).toInt();
+    int selectionIndex = m_ui->hardwareKeyCombo->currentIndex();
+    if (m_ui->useHardwareKeyCheckBox->isChecked()) {
+        auto slot = m_ui->hardwareKeyCombo->itemData(selectionIndex).value<YubiKeySlot>();
+        auto crKey = QSharedPointer<ChallengeResponseKey>(new ChallengeResponseKey(slot));
+        databaseKey->addChallengeResponseKey(crKey);
 
-        // read blocking mode from LSB and slot index number from second LSB
-        bool blocking = comboPayload & 1;
-        int slot = comboPayload >> 1;
-        auto crKey = QSharedPointer<YkChallengeResponseKey>(new YkChallengeResponseKey(slot, blocking));
-        masterKey->addChallengeResponseKey(crKey);
-        lastChallengeResponse[m_filename] = true;
+        // Qt doesn't read custom types in settings so stuff into a QString
+        lastChallengeResponse.insert(m_filename, QStringLiteral("%1:%2").arg(slot.first).arg(slot.second));
     }
 
-    if (config()->get("RememberLastKeyFiles").toBool()) {
-        config()->set("LastChallengeResponse", lastChallengeResponse);
+    if (config()->get(Config::RememberLastKeyFiles).toBool()) {
+        config()->set(Config::LastChallengeResponse, lastChallengeResponse);
     }
-#endif
 
-    return masterKey;
+    return databaseKey;
 }
 
 void DatabaseOpenWidget::reject()
@@ -357,81 +501,163 @@ void DatabaseOpenWidget::reject()
     emit dialogFinished(false);
 }
 
-void DatabaseOpenWidget::browseKeyFile()
+bool DatabaseOpenWidget::browseKeyFile()
 {
-    QString filters = QString("%1 (*);;%2 (*.key)").arg(tr("All files"), tr("Key files"));
-    if (!config()->get("RememberLastKeyFiles").toBool()) {
-        fileDialog()->setNextForgetDialog();
+    QString filters = QString("%1 (*);;%2 (*.keyx; *.key)").arg(tr("All files"), tr("Key files"));
+    QString filename =
+        fileDialog()->getOpenFileName(this, tr("Select key file"), FileDialog::getLastDir("keyfile"), filters);
+    if (filename.isEmpty()) {
+        return false;
     }
-    QString filename = fileDialog()->getOpenFileName(this, tr("Select key file"), QString(), filters);
-
-    if (!filename.isEmpty()) {
-        m_ui->comboKeyFile->setCurrentIndex(-1);
-        m_ui->comboKeyFile->setEditText(filename);
+    if (config()->get(Config::RememberLastKeyFiles).toBool()) {
+        FileDialog::saveLastDir("keyfile", filename, true);
+    } else {
+        FileDialog::saveLastDir("keyfile", {});
     }
+
+    if (QFileInfo(filename).canonicalFilePath() == QFileInfo(m_filename).canonicalFilePath()) {
+        MessageBox::warning(this,
+                            tr("Cannot use database file as key file"),
+                            tr("Your database file is NOT a key file!\nIf you don't have a key file or don't know what "
+                               "that is, you don't have to select one."),
+                            MessageBox::Button::Ok);
+        return false;
+    }
+    if (filename.endsWith(".kdbx")
+        && MessageBox::warning(this,
+                               tr("KeePassXC database file selected"),
+                               tr("The file you selected looks like a database file.\nA database file is NOT a key "
+                                  "file!\n\nAre you sure you want to continue with this file?."),
+                               MessageBox::Button::Yes | MessageBox::Button::Cancel,
+                               MessageBox::Button::Cancel)
+               != MessageBox::Yes) {
+        return false;
+    }
+
+    m_ui->keyFileLineEdit->setText(filename);
+    return true;
 }
 
-void DatabaseOpenWidget::clearKeyFileEdit()
+void DatabaseOpenWidget::pollHardwareKey(bool manualTrigger, int delay)
 {
-    m_ui->comboKeyFile->setCurrentIndex(0);
-    // make sure that handler is called even if 0 was the current index already
-    handleKeyFileComboChanged();
+    if (m_pollingHardwareKey) {
+        return;
+    }
+
+    m_ui->hardwareKeyCombo->setEnabled(false);
+    m_ui->useHardwareKeyCheckBox->setEnabled(false);
+    m_ui->hardwareKeyProgress->setVisible(true);
+    m_ui->refreshHardwareKeys->setEnabled(false);
+    m_ui->noHardwareKeysFoundLabel->setVisible(false);
+    m_pollingHardwareKey = true;
+    m_manualHardwareKeyRefresh = manualTrigger;
+
+    QTimer::singleShot(delay, this, [] { YubiKey::instance()->findValidKeysAsync(); });
 }
 
-void DatabaseOpenWidget::handleKeyFileComboEdited()
+void DatabaseOpenWidget::hardwareKeyResponse(bool found)
 {
-    m_keyFileComboEdited = true;
-    m_ui->keyFileClearIcon->setVisible(true);
-}
+    m_ui->useHardwareKeyCheckBox->setEnabled(true);
+    m_ui->hardwareKeyProgress->setVisible(false);
+    m_ui->refreshHardwareKeys->setEnabled(true);
+    m_ui->hardwareKeyCombo->clear();
+    m_pollingHardwareKey = false;
 
-void DatabaseOpenWidget::handleKeyFileComboChanged()
-{
-    m_keyFileComboEdited = m_ui->comboKeyFile->currentIndex() != 0;
-    m_ui->keyFileClearIcon->setVisible(m_keyFileComboEdited);
-}
+    if (!found) {
+        toggleHardwareKeyComponent(false);
+        return;
+    }
 
-void DatabaseOpenWidget::pollYubikey()
-{
-    m_ui->buttonRedetectYubikey->setEnabled(false);
-    m_ui->comboChallengeResponse->setEnabled(false);
-    m_ui->comboChallengeResponse->clear();
-    m_ui->comboChallengeResponse->addItem(tr("Select slot..."), -1);
-    m_ui->yubikeyProgress->setVisible(true);
-
-    // YubiKey init is slow, detect asynchronously to not block the UI
-    QtConcurrent::run(YubiKey::instance(), &YubiKey::detect);
-}
-
-void DatabaseOpenWidget::yubikeyDetected(int slot, bool blocking)
-{
-    YkChallengeResponseKey yk(slot, blocking);
-    // add detected YubiKey to combo box and encode blocking mode in LSB, slot number in second LSB
-    m_ui->comboChallengeResponse->addItem(yk.getName(), QVariant((slot << 1) | blocking));
-
-    if (config()->get("RememberLastKeyFiles").toBool()) {
-        QHash<QString, QVariant> lastChallengeResponse = config()->get("LastChallengeResponse").toHash();
+    YubiKeySlot lastUsedSlot;
+    if (config()->get(Config::RememberLastKeyFiles).toBool()) {
+        auto lastChallengeResponse = config()->get(Config::LastChallengeResponse).toHash();
         if (lastChallengeResponse.contains(m_filename)) {
-            m_ui->comboChallengeResponse->setCurrentIndex(1);
+            // Qt doesn't read custom types in settings so extract from QString
+            auto split = lastChallengeResponse.value(m_filename).toString().split(":");
+            if (split.size() > 1) {
+                lastUsedSlot = YubiKeySlot(split[0].toUInt(), split[1].toInt());
+            }
+            m_ui->useHardwareKeyCheckBox->setChecked(true);
+        }
+    }
+
+    int selectedIndex = 0;
+    const auto foundKeys = YubiKey::instance()->foundKeys();
+    for (auto i = foundKeys.cbegin(); i != foundKeys.cend(); ++i) {
+        // add detected YubiKey to combo box
+        m_ui->hardwareKeyCombo->addItem(i.value(), QVariant::fromValue(i.key()));
+        // Select this YubiKey + Slot if we used it in the past
+        if (lastUsedSlot == i.key()) {
+            selectedIndex = m_ui->hardwareKeyCombo->count() - 1;
+        }
+    }
+
+    toggleHardwareKeyComponent(true);
+    m_ui->hardwareKeyCombo->setEnabled(m_ui->useHardwareKeyCheckBox->isChecked());
+    m_ui->hardwareKeyCombo->setCurrentIndex(selectedIndex);
+}
+
+void DatabaseOpenWidget::setUserInteractionLock(bool state)
+{
+    if (state) {
+        QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
+        m_ui->centralStack->setEnabled(false);
+    } else {
+        // Ensure no override cursors remain
+        while (QApplication::overrideCursor()) {
+            QApplication::restoreOverrideCursor();
+        }
+        m_ui->centralStack->setEnabled(true);
+    }
+    m_unlockingDatabase = state;
+}
+
+bool DatabaseOpenWidget::canPerformQuickUnlock() const
+{
+    return !m_db.isNull() && isQuickUnlockAvailable() && getQuickUnlock()->hasKey(m_db->publicUuid());
+}
+
+bool DatabaseOpenWidget::isOnQuickUnlockScreen() const
+{
+    return m_ui->centralStack->currentIndex() == 1;
+}
+
+void DatabaseOpenWidget::toggleQuickUnlockScreen()
+{
+    if (canPerformQuickUnlock()) {
+        m_ui->centralStack->setCurrentIndex(1);
+        // Work around qt issue where focus is stolen even if not visible
+        if (m_ui->quickUnlockButton->isVisible()) {
+            m_ui->quickUnlockButton->setFocus();
+        }
+    } else {
+        m_ui->centralStack->setCurrentIndex(0);
+        // Work around qt issue where focus is stolen even if not visible
+        if (m_ui->editPassword->isVisible()) {
+            m_ui->editPassword->setFocus();
         }
     }
 }
 
-void DatabaseOpenWidget::yubikeyDetectComplete()
+void DatabaseOpenWidget::triggerQuickUnlock()
 {
-    m_ui->comboChallengeResponse->setEnabled(true);
-    m_ui->buttonRedetectYubikey->setEnabled(true);
-    m_ui->yubikeyProgress->setVisible(false);
-    m_yubiKeyBeingPolled = false;
+    if (isOnQuickUnlockScreen()) {
+        m_ui->quickUnlockButton->click();
+    }
 }
 
-void DatabaseOpenWidget::noYubikeyFound()
+/**
+ * Reset installed quick unlock secrets.
+ *
+ * It's safe to call this method even if quick unlock is unavailable.
+ */
+void DatabaseOpenWidget::resetQuickUnlock()
 {
-    m_ui->buttonRedetectYubikey->setEnabled(true);
-    m_ui->yubikeyProgress->setVisible(false);
-    m_yubiKeyBeingPolled = false;
-}
-
-void DatabaseOpenWidget::openHardwareKeyHelp()
-{
-    QDesktopServices::openUrl(QUrl("https://keepassxc.org/docs#hwtoken"));
+    if (!isQuickUnlockAvailable()) {
+        return;
+    }
+    if (!m_db.isNull()) {
+        getQuickUnlock()->reset(m_db->publicUuid());
+    }
+    load(m_filename);
 }

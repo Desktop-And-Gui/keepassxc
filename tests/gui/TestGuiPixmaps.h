@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2011 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -20,7 +21,6 @@
 
 #include <QImage>
 #include <QObject>
-#include <QPixmap>
 
 class TestGuiPixmaps : public QObject
 {
@@ -31,9 +31,6 @@ private slots:
     void testDatabaseIcons();
     void testEntryIcons();
     void testGroupIcons();
-
-private:
-    void compareImages(const QPixmap& pixmap, const QImage& image);
 };
 
 #endif // KEEPASSX_TESTGUIPIXMAPS_H

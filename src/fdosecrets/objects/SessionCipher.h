@@ -18,37 +18,42 @@
 #ifndef KEEPASSXC_FDOSECRETS_SESSIONCIPHER_H
 #define KEEPASSXC_FDOSECRETS_SESSIONCIPHER_H
 
-#include "fdosecrets/GcryptMPI.h"
-#include "fdosecrets/objects/Session.h"
+#include "fdosecrets/dbus/DBusTypes.h"
 
-class TestFdoSecrets;
+#include <QSharedPointer>
+
+namespace Botan
+{
+    class DH_PrivateKey;
+}
 
 namespace FdoSecrets
 {
-
     class CipherPair
     {
         Q_DISABLE_COPY(CipherPair)
     public:
         CipherPair() = default;
         virtual ~CipherPair() = default;
-        virtual SecretStruct encrypt(const SecretStruct& input) = 0;
-        virtual SecretStruct decrypt(const SecretStruct& input) = 0;
+        virtual Secret encrypt(const Secret& input) = 0;
+        virtual Secret decrypt(const Secret& input) = 0;
         virtual bool isValid() const = 0;
-        virtual QVariant negotiationOutput() const;
+        virtual QVariant negotiationOutput() const = 0;
     };
 
     class PlainCipher : public CipherPair
     {
         Q_DISABLE_COPY(PlainCipher)
     public:
+        static constexpr const char Algorithm[] = "plain";
+
         PlainCipher() = default;
-        SecretStruct encrypt(const SecretStruct& input) override
+        Secret encrypt(const Secret& input) override
         {
             return input;
         }
 
-        SecretStruct decrypt(const SecretStruct& input) override
+        Secret decrypt(const Secret& input) override
         {
             return input;
         }
@@ -57,70 +62,33 @@ namespace FdoSecrets
         {
             return true;
         }
+
+        QVariant negotiationOutput() const override
+        {
+            return QStringLiteral("");
+        }
     };
 
     class DhIetf1024Sha256Aes128CbcPkcs7 : public CipherPair
     {
-        bool m_valid;
-        QByteArray m_privateKey;
-        QByteArray m_publicKey;
-        QByteArray m_aesKey;
-
-        /**
-         * Diffie Hullman Key Exchange
-         * Given client public key, generate server private/public key pair and common secret.
-         * This also sets m_publicKey to server's public key
-         * @param clientPublicKey client public key
-         * @param serverPrivate server private key
-         * @param commonSecretBytes output common secret
-         * @return true on success.
-         */
-        bool
-        diffieHullman(const GcryptMPI& clientPublicKey, const GcryptMPI& serverPrivate, QByteArray& commonSecretBytes);
-
-        /**
-         * Perform HKDF defined in RFC5869, using sha256 as hash function
-         * @param IKM input keying material
-         * @return derived 128-bit key suitable for AES
-         */
-        QByteArray hkdf(const QByteArray& IKM);
-
-        /**
-         * Add PKCS#7 style padding to input inplace
-         * @param input
-         * @param blockSize the block size to use, must be 2's power
-         * @return reference to input for chaining
-         */
-        QByteArray& padPkcs7(QByteArray& input, int blockSize);
-
-        /**
-         * Remove PKCS#7 style padding from input inplace
-         * @param input
-         * @return reference to input for chaining
-         */
-        QByteArray& unpadPkcs7(QByteArray& input);
-
-        bool initialize(GcryptMPI clientPublic, GcryptMPI serverPublic, GcryptMPI serverPrivate);
-
-        DhIetf1024Sha256Aes128CbcPkcs7()
-            : m_valid(false)
-        {
-        }
-
     public:
-        explicit DhIetf1024Sha256Aes128CbcPkcs7(const QByteArray& clientPublicKeyBytes);
+        static constexpr const char Algorithm[] = "dh-ietf1024-sha256-aes128-cbc-pkcs7";
 
-        SecretStruct encrypt(const SecretStruct& input) override;
+        explicit DhIetf1024Sha256Aes128CbcPkcs7(const QByteArray& clientPublicKey);
 
-        SecretStruct decrypt(const SecretStruct& input) override;
-
+        Secret encrypt(const Secret& input) override;
+        Secret decrypt(const Secret& input) override;
         bool isValid() const override;
-
         QVariant negotiationOutput() const override;
+
+        bool updateClientPublicKey(const QByteArray& clientPublicKey);
 
     private:
         Q_DISABLE_COPY(DhIetf1024Sha256Aes128CbcPkcs7);
-        friend class ::TestFdoSecrets;
+
+        bool m_valid = false;
+        QSharedPointer<Botan::DH_PrivateKey> m_privateKey;
+        QByteArray m_aesKey;
     };
 
 } // namespace FdoSecrets

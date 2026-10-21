@@ -17,8 +17,6 @@
 
 #include "ElidedLabel.h"
 
-#include <QResizeEvent>
-
 namespace
 {
     const QString htmlLinkTemplate("<a href=\"%1\">%2</a>");
@@ -56,8 +54,9 @@ QString ElidedLabel::url() const
 
 void ElidedLabel::setElideMode(Qt::TextElideMode elideMode)
 {
-    if (m_elideMode == elideMode)
+    if (m_elideMode == elideMode) {
         return;
+    }
 
     if (m_elideMode != Qt::ElideNone) {
         setWordWrap(false);
@@ -69,8 +68,9 @@ void ElidedLabel::setElideMode(Qt::TextElideMode elideMode)
 
 void ElidedLabel::setRawText(const QString& elidedText)
 {
-    if (m_rawText == elidedText)
+    if (m_rawText == elidedText) {
         return;
+    }
 
     m_rawText = elidedText;
     emit rawTextChanged(m_rawText);
@@ -78,8 +78,9 @@ void ElidedLabel::setRawText(const QString& elidedText)
 
 void ElidedLabel::setUrl(const QString& url)
 {
-    if (m_url == url)
+    if (m_url == url) {
         return;
+    }
 
     m_url = url;
     emit urlChanged(m_url);
@@ -105,8 +106,10 @@ void ElidedLabel::updateElidedText()
         const QFontMetrics metrix(font());
         displayText = metrix.elidedText(m_rawText, m_elideMode, width() - 2);
     }
-    setText(m_url.isEmpty() ? displayText : htmlLinkTemplate.arg(m_url, displayText));
-    setOpenExternalLinks(!m_url.isEmpty());
+
+    bool hasUrl = !m_url.isEmpty();
+    setText(hasUrl ? htmlLinkTemplate.arg(m_url.toHtmlEscaped(), displayText) : displayText);
+    setOpenExternalLinks(!hasUrl);
 }
 
 void ElidedLabel::resizeEvent(QResizeEvent* event)

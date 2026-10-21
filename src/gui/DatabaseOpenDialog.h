@@ -19,10 +19,12 @@
 #define KEEPASSX_UNLOCKDATABASEDIALOG_H
 
 #include "core/Global.h"
+#include "gui/MessageWidget.h"
 
 #include <QDialog>
+#include <QList>
 #include <QPointer>
-#include <QSharedPointer>
+#include <QTabBar>
 
 class Database;
 class DatabaseWidget;
@@ -38,27 +40,40 @@ public:
         None,
         AutoType,
         Merge,
+        RemoteSync,
         Browser
     };
 
     explicit DatabaseOpenDialog(QWidget* parent = nullptr);
-    void setFilePath(const QString& filePath);
-    void setTargetDatabaseWidget(DatabaseWidget* dbWidget);
+    void setTarget(DatabaseWidget* dbWidget, const QString& filePath);
+    void addDatabaseTab(DatabaseWidget* dbWidget);
+    void setActiveDatabaseTab(DatabaseWidget* dbWidget);
     void setIntent(Intent intent);
     Intent intent() const;
-    QSharedPointer<Database> database();
+    QSharedPointer<Database> database() const;
     void clearForms();
+    void showMessage(const QString& text, MessageWidget::MessageType type, int autoHideTimeout);
 
 signals:
-    void dialogFinished(bool);
+    void dialogFinished(bool accepted, DatabaseWidget* dbWidget);
 
 public slots:
+    void done(int result) override;
     void complete(bool accepted);
+    void tabChanged(int index);
+
+protected:
+    void showEvent(QShowEvent* event) override;
 
 private:
+    void closeEvent(QCloseEvent* e) override;
+    void selectTabOffset(int offset);
+
     QPointer<DatabaseOpenWidget> m_view;
+    QPointer<QTabBar> m_tabBar;
     QSharedPointer<Database> m_db;
-    QPointer<DatabaseWidget> m_dbWidget;
+    QList<QPointer<DatabaseWidget>> m_tabDbWidgets;
+    QPointer<DatabaseWidget> m_currentDbWidget;
     Intent m_intent = Intent::None;
 };
 

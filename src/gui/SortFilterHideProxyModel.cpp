@@ -20,6 +20,7 @@
 SortFilterHideProxyModel::SortFilterHideProxyModel(QObject* parent)
     : QSortFilterProxyModel(parent)
 {
+    m_collator.setNumericMode(true);
 }
 
 Qt::DropActions SortFilterHideProxyModel::supportedDragActions() const
@@ -37,7 +38,18 @@ void SortFilterHideProxyModel::hideColumn(int column, bool hide)
 
 bool SortFilterHideProxyModel::filterAcceptsColumn(int sourceColumn, const QModelIndex& sourceParent) const
 {
-    Q_UNUSED(sourceParent);
+    Q_UNUSED(sourceParent)
 
     return sourceColumn >= m_hiddenColumns.size() || !m_hiddenColumns.at(sourceColumn);
+}
+
+bool SortFilterHideProxyModel::lessThan(const QModelIndex& left, const QModelIndex& right) const
+{
+    auto leftData = sourceModel()->data(left, sortRole());
+    auto rightData = sourceModel()->data(right, sortRole());
+    if (leftData.type() == QVariant::String) {
+        return m_collator.compare(leftData.toString(), rightData.toString()) < 0;
+    }
+
+    return QSortFilterProxyModel::lessThan(left, right);
 }

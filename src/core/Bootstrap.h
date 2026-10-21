@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2020 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,13 +18,11 @@
 #ifndef KEEPASSXC_BOOTSTRAP_H
 #define KEEPASSXC_BOOTSTRAP_H
 
-#include "gui/MainWindow.h"
+#include <QString>
 
 namespace Bootstrap
 {
-    void bootstrap();
-    void bootstrapApplication();
-    void restoreMainWindowState(MainWindow& mainWindow);
+    void bootstrap(const QString& uiLanguage = "system");
     void disableCoreDumps();
     bool createWindowsDACL();
     void setupSearchPaths();

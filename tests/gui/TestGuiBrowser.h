@@ -22,12 +22,6 @@
 #include "gui/MainWindow.h"
 #include "util/TemporaryFile.h"
 
-#include <QAbstractItemModel>
-#include <QObject>
-#include <QPointer>
-#include <QScopedPointer>
-#include <QSharedPointer>
-
 class Database;
 class DatabaseTabWidget;
 class DatabaseWidget;
@@ -45,22 +39,20 @@ private slots:
 
     void testEntrySettings();
     void testAdditionalURLs();
+    void testGetDatabaseGroups();
 
 private:
     void triggerAction(const QString& name);
     void clickIndex(const QModelIndex& index,
                     QAbstractItemView* view,
                     Qt::MouseButton button,
-                    Qt::KeyboardModifiers stateKey = 0);
+                    Qt::KeyboardModifiers stateKey = {});
 
     QScopedPointer<MainWindow> m_mainWindow;
     QPointer<DatabaseTabWidget> m_tabWidget;
     QPointer<DatabaseWidget> m_dbWidget;
     QSharedPointer<Database> m_db;
-    QByteArray m_dbData;
     QScopedPointer<TemporaryFile> m_dbFile;
-    QString m_dbFileName;
-    QString m_dbFilePath;
 };
 
 #endif // KEEPASSXC_TESTGUIBROWSER_H

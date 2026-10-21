@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2025 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2017 Vladimir Svyatski <v.unreal@gmail.com>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,16 +17,23 @@
  */
 
 #include "TestDatabase.h"
-#include "TestGlobal.h"
 
+#include <QRegularExpression>
 #include <QSignalSpy>
+#include <QTest>
 
 #include "config-keepassx-tests.h"
+#include "core/Group.h"
 #include "core/Metadata.h"
+#include "core/Tools.h"
 #include "crypto/Crypto.h"
 #include "format/KeePass2Writer.h"
-#include "keys/PasswordKey.h"
 #include "util/TemporaryFile.h"
+
+#ifdef Q_OS_WIN
+#include <QFileInfo>
+#include <Windows.h>
+#endif
 
 QTEST_GUILESS_MAIN(TestDatabase)
 
@@ -35,6 +42,7 @@ static QString dbFileName = QStringLiteral(KEEPASSX_TEST_DATA_DIR).append("/NewD
 void TestDatabase::initTestCase()
 {
     QVERIFY(Crypto::init());
+    QLocale::setDefault(QLocale::c());
 }
 
 void TestDatabase::testOpen()
@@ -72,27 +80,63 @@ void TestDatabase::testSave()
     // Test safe saves
     db->metadata()->setName("test");
     QVERIFY(db->isModified());
-    QVERIFY2(db->save(&error), error.toLatin1());
+    QVERIFY2(db->save(Database::Atomic, {}, &error), error.toLatin1());
     QVERIFY(!db->isModified());
 
-    // Test unsafe saves
+    // Test temp-file saves
     db->metadata()->setName("test2");
-    QVERIFY2(db->save(&error, false, false), error.toLatin1());
+    QVERIFY2(db->save(Database::TempFile, QString(), &error), error.toLatin1());
+    QVERIFY(!db->isModified());
+
+    // Test direct-write saves
+    db->metadata()->setName("test3");
+    QVERIFY2(db->save(Database::DirectWrite, QString(), &error), error.toLatin1());
     QVERIFY(!db->isModified());
 
     // Test save backups
-    db->metadata()->setName("test3");
-    QVERIFY2(db->save(&error, true, true), error.toLatin1());
+    TemporaryFile backupFile;
+    auto backupFilePath = backupFile.fileName();
+    db->metadata()->setName("test4");
+    QVERIFY2(db->save(Database::Atomic, backupFilePath, &error), error.toLatin1());
     QVERIFY(!db->isModified());
 
-    // Confirm backup exists and then delete it
-    auto re = QRegularExpression("(\\.[^.]+)$");
-    auto match = re.match(tempFile.fileName());
-    auto backupFilePath = tempFile.fileName();
-    backupFilePath = backupFilePath.replace(re, "") + ".old" + match.captured(1);
     QVERIFY(QFile::exists(backupFilePath));
     QFile::remove(backupFilePath);
     QVERIFY(!QFile::exists(backupFilePath));
+}
+
+void TestDatabase::testSaveAs()
+{
+    TemporaryFile tempFile;
+    QVERIFY(tempFile.copyFromFile(dbFileName));
+
+    auto db = QSharedPointer<Database>::create();
+    auto key = QSharedPointer<CompositeKey>::create();
+    key->addKey(QSharedPointer<PasswordKey>::create("a"));
+
+    QString error;
+    QVERIFY(db->open(tempFile.fileName(), key, &error));
+
+    // Happy path case when try to save as new DB.
+    QSignalSpy spyFilePathChanged(db.data(), SIGNAL(filePathChanged(const QString&, const QString&)));
+    QString newDbFileName = QStringLiteral(KEEPASSX_TEST_DATA_DIR).append("/SaveAsNewDatabase.kdbx");
+    QVERIFY2(db->saveAs(newDbFileName, Database::Atomic, QString(), &error), error.toLatin1());
+    QVERIFY(!db->isModified());
+    QCOMPARE(spyFilePathChanged.count(), 1);
+    QVERIFY(QFile::exists(newDbFileName));
+#ifdef Q_OS_WIN
+    QVERIFY(!QFileInfo(newDbFileName).isHidden());
+    SetFileAttributes(newDbFileName.toStdWString().c_str(), FILE_ATTRIBUTE_HIDDEN);
+    QVERIFY2(db->saveAs(newDbFileName, Database::Atomic, QString(), &error), error.toLatin1());
+    QVERIFY(QFileInfo(newDbFileName).isHidden());
+#endif
+    QFile::remove(newDbFileName);
+    QVERIFY(!QFile::exists(newDbFileName));
+
+    // Negative case when try to save not initialized DB.
+    db->releaseData();
+    QVERIFY2(!db->saveAs(newDbFileName, Database::Atomic, QString(), &error), error.toLatin1());
+    QCOMPARE(error, QString("Could not save, database has not been initialized!"));
 }
 
 void TestDatabase::testSignals()
@@ -110,15 +154,18 @@ void TestDatabase::testSignals()
     QVERIFY(ok);
     QCOMPARE(spyFilePathChanged.count(), 1);
 
-    QSignalSpy spyModified(db.data(), SIGNAL(databaseModified()));
+    QSignalSpy spyModified(db.data(), SIGNAL(modified()));
     db->metadata()->setName("test1");
     QTRY_COMPARE(spyModified.count(), 1);
 
     QSignalSpy spySaved(db.data(), SIGNAL(databaseSaved()));
-    QVERIFY(db->save(&error));
+    QVERIFY(db->save(Database::Atomic, {}, &error));
     QCOMPARE(spySaved.count(), 1);
 
-    QSignalSpy spyFileChanged(db.data(), SIGNAL(databaseFileChanged()));
+    // Short delay to allow file system settling to reduce test failures
+    Tools::wait(100);
+
+    QSignalSpy spyFileChanged(db.data(), &Database::databaseFileChanged);
     QVERIFY(tempFile.copyFromFile(dbFileName));
     QTRY_COMPARE(spyFileChanged.count(), 1);
     QTRY_VERIFY(!db->isModified());
@@ -137,13 +184,9 @@ void TestDatabase::testEmptyRecycleBinOnDisabled()
     auto key = QSharedPointer<CompositeKey>::create();
     key->addKey(QSharedPointer<PasswordKey>::create("123"));
     auto db = QSharedPointer<Database>::create();
-    QVERIFY(db->open(filename, key, nullptr, false));
+    QVERIFY(db->open(filename, key, nullptr));
 
-    // Explicitly mark DB as read-write in case it was opened from a read-only drive.
-    // Prevents assertion failures on CI systems when the data dir is not writable
-    db->setReadOnly(false);
-
-    QSignalSpy spyModified(db.data(), SIGNAL(databaseModified()));
+    QSignalSpy spyModified(db.data(), SIGNAL(modified()));
 
     db->emptyRecycleBin();
     // The database must be unmodified in this test after emptying the recycle bin.
@@ -156,10 +199,9 @@ void TestDatabase::testEmptyRecycleBinOnNotCreated()
     auto key = QSharedPointer<CompositeKey>::create();
     key->addKey(QSharedPointer<PasswordKey>::create("123"));
     auto db = QSharedPointer<Database>::create();
-    QVERIFY(db->open(filename, key, nullptr, false));
-    db->setReadOnly(false);
+    QVERIFY(db->open(filename, key, nullptr));
 
-    QSignalSpy spyModified(db.data(), SIGNAL(databaseModified()));
+    QSignalSpy spyModified(db.data(), SIGNAL(modified()));
 
     db->emptyRecycleBin();
     // The database must be unmodified in this test after emptying the recycle bin.
@@ -172,10 +214,9 @@ void TestDatabase::testEmptyRecycleBinOnEmpty()
     auto key = QSharedPointer<CompositeKey>::create();
     key->addKey(QSharedPointer<PasswordKey>::create("123"));
     auto db = QSharedPointer<Database>::create();
-    QVERIFY(db->open(filename, key, nullptr, false));
-    db->setReadOnly(false);
+    QVERIFY(db->open(filename, key, nullptr));
 
-    QSignalSpy spyModified(db.data(), SIGNAL(databaseModified()));
+    QSignalSpy spyModified(db.data(), SIGNAL(modified()));
 
     db->emptyRecycleBin();
     // The database must be unmodified in this test after emptying the recycle bin.
@@ -188,8 +229,7 @@ void TestDatabase::testEmptyRecycleBinWithHierarchicalData()
     auto key = QSharedPointer<CompositeKey>::create();
     key->addKey(QSharedPointer<PasswordKey>::create("123"));
     auto db = QSharedPointer<Database>::create();
-    QVERIFY(db->open(filename, key, nullptr, false));
-    db->setReadOnly(false);
+    QVERIFY(db->open(filename, key, nullptr));
 
     QFile originalFile(filename);
     qint64 initialSize = originalFile.size();
@@ -205,4 +245,150 @@ void TestDatabase::testEmptyRecycleBinWithHierarchicalData()
     KeePass2Writer writer;
     writer.writeDatabase(&afterCleanup, db.data());
     QVERIFY(afterCleanup.size() < initialSize);
+}
+
+void TestDatabase::testCustomIcons()
+{
+    Database db;
+
+    QUuid uuid1 = QUuid::createUuid();
+    QByteArray icon1("icon 1");
+    Q_ASSERT(!icon1.isNull());
+    db.metadata()->addCustomIcon(uuid1, icon1);
+    Metadata::CustomIconData iconData = db.metadata()->customIcon(uuid1);
+    QCOMPARE(iconData.data, icon1);
+    QVERIFY(iconData.name.isNull());
+    QVERIFY(iconData.lastModified.isNull());
+
+    QUuid uuid2 = QUuid::createUuid();
+    QByteArray icon2("icon 2");
+    QDateTime date = QDateTime::currentDateTimeUtc();
+    db.metadata()->addCustomIcon(uuid2, icon2, "Test", date);
+    iconData = db.metadata()->customIcon(uuid2);
+    QCOMPARE(iconData.data, icon2);
+    QCOMPARE(iconData.name, QString("Test"));
+    QCOMPARE(iconData.lastModified, date);
+}
+
+void TestDatabase::testExternallyModified()
+{
+    TemporaryFile tempFile;
+    QVERIFY(tempFile.copyFromFile(dbFileName));
+
+    auto db = QSharedPointer<Database>::create();
+    auto key = QSharedPointer<CompositeKey>::create();
+    key->addKey(QSharedPointer<PasswordKey>::create("a"));
+
+    QString error;
+    QVERIFY(db->open(tempFile.fileName(), key, &error) == true);
+    db->metadata()->setName("test2");
+    QVERIFY(db->save(Database::Atomic, {}, &error));
+
+    QSignalSpy spyFileChanged(db.data(), &Database::databaseFileChanged);
+    QVERIFY(tempFile.copyFromFile(dbFileName));
+    QTRY_COMPARE(spyFileChanged.count(), 1);
+    // the first argument of the databaseFileChanged signal (triggeredBySave) should be false
+    QVERIFY(spyFileChanged.at(0).length() == 1);
+    QVERIFY(spyFileChanged.at(0).at(0).type() == QVariant::Bool);
+    QVERIFY(spyFileChanged.at(0).at(0).toBool() == false);
+    spyFileChanged.clear();
+    // shouldn't be able to save due to external changes
+    QVERIFY(db->save(Database::Atomic, {}, &error) == false);
+    QApplication::processEvents();
+    // save should have triggered another databaseFileChanged signal
+    QVERIFY(spyFileChanged.count() >= 1);
+    // the first argument of the databaseFileChanged signal (triggeredBySave) should be true
+    QVERIFY(spyFileChanged.at(0).at(0).type() == QVariant::Bool);
+    QVERIFY(spyFileChanged.at(0).at(0).toBool() == true);
+
+    // should be able to overwrite externally modified changes when explicitly requested
+    db->setIgnoreFileChangesUntilSaved(true);
+    QVERIFY(db->save(Database::Atomic, {}, &error));
+    // ignoreFileChangesUntilSaved should reset after save
+    QVERIFY(db->ignoreFileChangesUntilSaved() == false);
+}
+
+void TestDatabase::testCustomAttributeKeys()
+{
+    // Check for:
+    // - duplicate key
+    // - key of protected fields
+    // - recycled entry or group
+    // - unicode
+    // - sorting
+    Database db;
+    db.metadata()->setRecycleBinEnabled(true);
+    QVERIFY(db.metadata()->recycleBinEnabled());
+
+    auto root = db.rootGroup();
+    QVERIFY(root);
+
+    // Empty database
+    db.updateCustomAttributeKeys();
+    QCOMPARE(db.customAttributeKeys(), {});
+
+    // Custom attributes of an entry in the root group
+    auto entry1 = new Entry();
+    entry1->setGroup(root);
+    entry1->attributes()->set("Custom2", "value");
+    entry1->attributes()->set("DuplicateKey", "value");
+    entry1->attributes()->set("東京", "unicode1");
+
+    // Custom attributes of an entry in a nested group
+    auto group = new Group();
+    group->setName("Nested");
+    group->setParent(root);
+
+    auto entry2 = new Entry();
+    entry2->setGroup(group);
+    entry2->attributes()->set("ProtectedKey", "value", true);
+    entry2->attributes()->set("DuplicateKey", "value3");
+    entry2->attributes()->set("Custom1", "value");
+    entry2->attributes()->set("Naïve Café Österreich", "unicode2");
+    entry2->attributes()->set("😀Emoji", "unicode3");
+
+    auto entry3 = new Entry();
+    entry3->setGroup(group);
+    entry3->attributes()->set("Custom2", "another value");
+    entry3->attributes()->set("customLowerCase", "value2");
+    entry3->attributes()->set("Key with spaces", "test");
+
+    // Entries in the recycle bin do not contribute
+    auto recycledEntry = new Entry();
+    recycledEntry->setGroup(root);
+    recycledEntry->attributes()->set("RecycledKey", "value");
+    recycledEntry->attributes()->set("RecycledKeyProtected", "value", true);
+    db.recycleEntry(recycledEntry);
+
+    auto groupRecycled = new Group();
+    groupRecycled->setName("groupRecycled");
+    groupRecycled->setParent(root);
+    auto entryInRecycledGroup = new Entry();
+    entryInRecycledGroup->setGroup(groupRecycled);
+    entryInRecycledGroup->attributes()->set("RecycledKeyGroup", "value");
+    db.recycleGroup(groupRecycled);
+
+    // Check if recycledEntry and groupRecycled are actually recycled
+    QVERIFY(recycledEntry->isRecycled());
+    QVERIFY(groupRecycled->isRecycled());
+
+    db.updateCustomAttributeKeys();
+
+    QVERIFY(!db.customAttributeKeys().contains("RecycledKey"));
+    QVERIFY(!db.customAttributeKeys().contains("RecycledKeyProtected"));
+    QVERIFY(!db.customAttributeKeys().contains("RecycledKeyGroup"));
+
+    const QStringList expectedKeys = {
+        QStringLiteral("Custom1"),
+        QStringLiteral("Custom2"),
+        QStringLiteral("customLowerCase"),
+        QStringLiteral("DuplicateKey"),
+        QStringLiteral("Key with spaces"),
+        QStringLiteral("Naïve Café Österreich"),
+        QStringLiteral("ProtectedKey"),
+        QStringLiteral("東京"),
+        QStringLiteral("😀Emoji"),
+    };
+
+    QCOMPARE(db.customAttributeKeys(), expectedKeys);
 }

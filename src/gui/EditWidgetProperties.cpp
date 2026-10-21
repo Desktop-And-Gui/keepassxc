@@ -41,16 +41,13 @@ EditWidgetProperties::EditWidgetProperties(QWidget* parent)
     connect(m_ui->removeCustomDataButton, SIGNAL(clicked()), SLOT(removeSelectedPluginData()));
 }
 
-EditWidgetProperties::~EditWidgetProperties()
-{
-}
+EditWidgetProperties::~EditWidgetProperties() = default;
 
 void EditWidgetProperties::setFields(const TimeInfo& timeInfo, const QUuid& uuid)
 {
     static const QString timeFormat("d MMM yyyy HH:mm:ss");
     m_ui->modifiedEdit->setText(timeInfo.lastModificationTime().toLocalTime().toString(timeFormat));
     m_ui->createdEdit->setText(timeInfo.creationTime().toLocalTime().toString(timeFormat));
-    m_ui->accessedEdit->setText(timeInfo.lastAccessTime().toLocalTime().toString(timeFormat));
     m_ui->uuidEdit->setText(uuid.toRfc4122().toHex());
 }
 
@@ -63,7 +60,7 @@ void EditWidgetProperties::setCustomData(CustomData* customData)
     m_customData = customData;
 
     if (m_customData) {
-        connect(m_customData, SIGNAL(customDataModified()), SLOT(update()));
+        connect(m_customData, &CustomData::modified, this, &EditWidgetProperties::update);
     }
 
     update();

@@ -20,14 +20,15 @@
 
 #include <QObject>
 
+#include "core/Entry.h"
 #include "core/EntrySearcher.h"
-#include "core/Group.h"
 
 class TestEntrySearcher : public QObject
 {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void init();
     void cleanup();
 
@@ -36,6 +37,10 @@ private slots:
     void testAllAttributesAreSearched();
     void testSearchTermParser();
     void testCustomAttributesAreSearched();
+    void testGroup();
+    void testSkipProtected();
+    void testUUIDSearch();
+    void testTotpSearch();
 
 private:
     Group* m_rootGroup;

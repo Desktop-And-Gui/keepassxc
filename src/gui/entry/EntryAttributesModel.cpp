@@ -17,16 +17,14 @@
 
 #include "EntryAttributesModel.h"
 
-#include "core/Entry.h"
-#include "core/Tools.h"
-
-#include <algorithm>
+#include "core/EntryAttributes.h"
 
 EntryAttributesModel::EntryAttributesModel(QObject* parent)
     : QAbstractListModel(parent)
     , m_entryAttributes(nullptr)
     , m_nextRenameDataChange(false)
 {
+    m_collator.setNumericMode(true);
 }
 
 void EntryAttributesModel::setEntryAttributes(EntryAttributes* entryAttributes)
@@ -83,14 +81,14 @@ QVariant EntryAttributesModel::headerData(int section, Qt::Orientation orientati
     if ((orientation == Qt::Horizontal) && (role == Qt::DisplayRole) && (section == 0)) {
         return tr("Name");
     } else {
-        return QVariant();
+        return {};
     }
 }
 
 QVariant EntryAttributesModel::data(const QModelIndex& index, int role) const
 {
     if (!index.isValid() || (role != Qt::DisplayRole && role != Qt::EditRole)) {
-        return QVariant();
+        return {};
     }
 
     return m_attributes.at(index.row());
@@ -127,7 +125,7 @@ QModelIndex EntryAttributesModel::indexByKey(const QString& key) const
     int row = m_attributes.indexOf(key);
 
     if (row == -1) {
-        return QModelIndex();
+        return {};
     } else {
         return index(row, 0);
     }
@@ -136,7 +134,7 @@ QModelIndex EntryAttributesModel::indexByKey(const QString& key) const
 QString EntryAttributesModel::keyByIndex(const QModelIndex& index) const
 {
     if (!index.isValid()) {
-        return QString();
+        return {};
     } else {
         return m_attributes.at(index.row());
     }
@@ -153,7 +151,7 @@ void EntryAttributesModel::attributeAboutToAdd(const QString& key)
 {
     QList<QString> rows = m_attributes;
     rows.append(key);
-    std::sort(rows.begin(), rows.end());
+    std::sort(rows.begin(), rows.end(), m_collator);
     int row = rows.indexOf(key);
     beginInsertRows(QModelIndex(), row, row);
 }
@@ -183,7 +181,7 @@ void EntryAttributesModel::attributeAboutToRename(const QString& oldKey, const Q
     QList<QString> rows = m_attributes;
     rows.removeOne(oldKey);
     rows.append(newKey);
-    std::sort(rows.begin(), rows.end());
+    std::sort(rows.begin(), rows.end(), m_collator);
     int newRow = rows.indexOf(newKey);
     if (newRow > oldRow) {
         newRow++;
@@ -235,4 +233,5 @@ void EntryAttributesModel::updateAttributes()
             m_attributes.append(key);
         }
     }
+    std::sort(m_attributes.begin(), m_attributes.end(), m_collator);
 }

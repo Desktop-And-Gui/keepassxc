@@ -14,33 +14,35 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
 #include "Session.h"
 
+#include "fdosecrets/objects/Service.h"
 #include "fdosecrets/objects/SessionCipher.h"
 
 #include "core/Tools.h"
 
 namespace FdoSecrets
 {
+    Session* Session::Create(QSharedPointer<CipherPair> cipher, const QString& peer, Service* parent)
+    {
+        QScopedPointer<Session> res{new Session(std::move(cipher), peer, parent)};
+        if (!res->dbus()->registerObject(res.data())) {
+            return nullptr;
+        }
 
-    QHash<QString, QVariant> Session::negoniationState;
+        return res.take();
+    }
 
-    Session::Session(std::unique_ptr<CipherPair>&& cipher, const QString& peer, Service* parent)
+    Session::Session(QSharedPointer<CipherPair> cipher, const QString& peer, Service* parent)
         : DBusObject(parent)
         , m_cipher(std::move(cipher))
         , m_peer(peer)
         , m_id(QUuid::createUuid())
     {
-        registerWithPath(QStringLiteral(DBUS_PATH_TEMPLATE_SESSION).arg(p()->objectPath().path(), id()),
-                         new SessionAdaptor(this));
     }
 
-    void Session::CleanupNegotiation(const QString& peer)
-    {
-        negoniationState.remove(peer);
-    }
-
-    DBusReturn<void> Session::close()
+    DBusResult Session::close()
     {
         emit aboutToClose();
         deleteLater();
@@ -58,48 +60,21 @@ namespace FdoSecrets
         return Tools::uuidToHex(m_id);
     }
 
-    std::unique_ptr<CipherPair> Session::CreateCiphers(const QString& peer,
-                                                       const QString& algorithm,
-                                                       const QVariant& input,
-                                                       QVariant& output,
-                                                       bool& incomplete)
+    Service* Session::service() const
     {
-        Q_UNUSED(peer);
-        incomplete = false;
-
-        std::unique_ptr<CipherPair> cipher{};
-        if (algorithm == QLatin1Literal("plain")) {
-            cipher.reset(new PlainCipher);
-        } else if (algorithm == QLatin1Literal("dh-ietf1024-sha256-aes128-cbc-pkcs7")) {
-            QByteArray clientPublicKey = input.toByteArray();
-            cipher.reset(new DhIetf1024Sha256Aes128CbcPkcs7(clientPublicKey));
-        } else {
-            // error notSupported
-        }
-
-        if (!cipher) {
-            return {};
-        }
-
-        if (!cipher->isValid()) {
-            qWarning() << "FdoSecrets: Error creating cipher";
-            return {};
-        }
-
-        output = cipher->negotiationOutput();
-        return cipher;
+        return qobject_cast<Service*>(parent());
     }
 
-    SecretStruct Session::encode(const SecretStruct& input) const
+    Secret Session::encode(const Secret& input) const
     {
         auto output = m_cipher->encrypt(input);
-        output.session = objectPath();
+        output.session = this;
         return output;
     }
 
-    SecretStruct Session::decode(const SecretStruct& input) const
+    Secret Session::decode(const Secret& input) const
     {
+        Q_ASSERT(input.session == this);
         return m_cipher->decrypt(input);
     }
-
 } // namespace FdoSecrets

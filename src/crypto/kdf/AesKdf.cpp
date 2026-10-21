@@ -20,6 +20,7 @@
 #include <QtConcurrent>
 
 #include "crypto/CryptoHash.h"
+#include "crypto/SymmetricCipher.h"
 #include "format/KeePass2.h"
 
 AesKdf::AesKdf()
@@ -61,43 +62,18 @@ QVariantMap AesKdf::writeParameters()
 
 bool AesKdf::transform(const QByteArray& raw, QByteArray& result) const
 {
-    QByteArray resultLeft;
-    QByteArray resultRight;
-
-    QFuture<bool> future = QtConcurrent::run(transformKeyRaw, raw.left(16), m_seed, m_rounds, &resultLeft);
-
-    bool rightResult = transformKeyRaw(raw.right(16), m_seed, m_rounds, &resultRight);
-    bool leftResult = future.result();
-
-    if (!rightResult || !leftResult) {
-        return false;
-    }
-
-    QByteArray transformed;
-    transformed.append(resultLeft);
-    transformed.append(resultRight);
-
-    result = CryptoHash::hash(transformed, CryptoHash::Sha256);
-    return true;
+    return transformKeyRaw(raw, m_seed, m_rounds, &result);
 }
 
 bool AesKdf::transformKeyRaw(const QByteArray& key, const QByteArray& seed, int rounds, QByteArray* result)
 {
-    QByteArray iv(16, 0);
-    SymmetricCipher cipher(SymmetricCipher::Aes256, SymmetricCipher::Ecb, SymmetricCipher::Encrypt);
-    if (!cipher.init(seed, iv)) {
-        qWarning("AesKdf::transformKeyRaw: error in SymmetricCipher::init: %s", cipher.errorString().toUtf8().data());
+    if (!result) {
         return false;
     }
 
-    *result = key;
-
-    if (!cipher.processInPlace(*result, rounds)) {
-        qWarning("AesKdf::transformKeyRaw: error in SymmetricCipher::processInPlace: %s",
-                 cipher.errorString().toUtf8().data());
-        return false;
-    }
-
+    auto out = key;
+    SymmetricCipher::aesKdf(seed, rounds, out);
+    *result = CryptoHash::hash(out, CryptoHash::Sha256);
     return true;
 }
 
@@ -106,22 +82,27 @@ QSharedPointer<Kdf> AesKdf::clone() const
     return QSharedPointer<AesKdf>::create(*this);
 }
 
-int AesKdf::benchmarkImpl(int msec) const
+int AesKdf::benchmark(int msec) const
 {
-    QByteArray key = QByteArray(16, '\x7E');
-    QByteArray seed = QByteArray(32, '\x4B');
-    QByteArray iv(16, 0);
+    QByteArray key(16, '\x7E');
+    QByteArray seed(32, '\x4B');
 
-    SymmetricCipher cipher(SymmetricCipher::Aes256, SymmetricCipher::Ecb, SymmetricCipher::Encrypt);
-    cipher.init(seed, iv);
+    int trials = 3;
+    int rounds = 1000000;
 
-    quint64 rounds = 1000000;
     QElapsedTimer timer;
     timer.start();
-
-    if (!cipher.processInPlace(key, rounds)) {
-        return -1;
+    for (int i = 0; i < trials; ++i) {
+        QByteArray result;
+        if (!transformKeyRaw(key, seed, rounds, &result)) {
+            return rounds;
+        }
     }
 
-    return static_cast<int>(rounds * (static_cast<float>(msec) / timer.elapsed()));
+    return static_cast<int>(rounds * trials * static_cast<float>(msec) / timer.elapsed());
+}
+
+QString AesKdf::toString() const
+{
+    return QObject::tr("AES (%1 rounds)").arg(QString::number(rounds()));
 }

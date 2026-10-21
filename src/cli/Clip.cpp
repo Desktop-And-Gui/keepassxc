@@ -15,71 +15,127 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <chrono>
-#include <cstdlib>
-#include <stdio.h>
-#include <thread>
-
 #include "Clip.h"
 
-#include "cli/TextStream.h"
-#include "cli/Utils.h"
-#include "core/Database.h"
-#include "core/Entry.h"
+#include "Utils.h"
+#include "core/EntrySearcher.h"
 #include "core/Group.h"
+#include "core/Tools.h"
 
-const QCommandLineOption Clip::TotpOption = QCommandLineOption(QStringList() << "t"
-                                                                             << "totp",
-                                                               QObject::tr("Copy the current TOTP to the clipboard."));
+#include <QCommandLineParser>
+
+#define CLI_DEFAULT_CLIP_TIMEOUT 10
+
+const QCommandLineOption Clip::AttributeOption = QCommandLineOption(
+    QStringList() << "a" << "attribute",
+    QObject::tr("Copy the given attribute to the clipboard. Defaults to \"password\" if not specified.",
+                "Don't translate \"password\", it refers to the attribute."),
+    "attr",
+    "password");
+
+const QCommandLineOption Clip::TotpOption =
+    QCommandLineOption(QStringList() << "t" << "totp",
+                       QObject::tr("Copy the current TOTP to the clipboard (equivalent to \"-a totp\")."));
+
+const QCommandLineOption Clip::BestMatchOption =
+    QCommandLineOption(QStringList() << "b" << "best-match",
+                       QObject::tr("Must match only one entry, otherwise a list of possible matches is shown."));
 
 Clip::Clip()
 {
     name = QString("clip");
-    description = QObject::tr("Copy an entry's password to the clipboard.");
+    description = QObject::tr("Copy an entry's attribute to the clipboard.");
+    options.append(Clip::AttributeOption);
     options.append(Clip::TotpOption);
+    options.append(Clip::BestMatchOption);
     positionalArguments.append(
         {QString("entry"), QObject::tr("Path of the entry to clip.", "clip = copy to clipboard"), QString("")});
     optionalArguments.append(
-        {QString("timeout"), QObject::tr("Timeout in seconds before clearing the clipboard."), QString("[timeout]")});
+        {QString("timeout"),
+         QObject::tr("Timeout before clearing the clipboard (default is %1 seconds, set to 0 for unlimited).")
+             .arg(CLI_DEFAULT_CLIP_TIMEOUT),
+         QString("[timeout]")});
 }
 
 int Clip::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
+    auto& out = parser->isSet(Command::QuietOption) ? Utils::DEVNULL : Utils::STDOUT;
+    auto& err = Utils::STDERR;
+
     const QStringList args = parser->positionalArguments();
-    QString entryPath = args.at(1);
-    QString timeout;
+
+    auto timeout = CLI_DEFAULT_CLIP_TIMEOUT;
     if (args.size() == 3) {
-        timeout = args.at(2);
-    }
-    bool clipTotp = parser->isSet(Clip::TotpOption);
-    TextStream errorTextStream(Utils::STDERR);
-
-    int timeoutSeconds = 0;
-    if (!timeout.isEmpty() && timeout.toInt() <= 0) {
-        errorTextStream << QObject::tr("Invalid timeout value %1.").arg(timeout) << endl;
-        return EXIT_FAILURE;
-    } else if (!timeout.isEmpty()) {
-        timeoutSeconds = timeout.toInt();
+        bool ok;
+        timeout = args.at(2).toInt(&ok);
+        if (!ok) {
+            err << QObject::tr("Invalid timeout value %1.").arg(args.at(2)) << Qt::endl;
+            return EXIT_FAILURE;
+        }
     }
 
-    TextStream outputTextStream(parser->isSet(Command::QuietOption) ? Utils::DEVNULL : Utils::STDOUT,
-                                QIODevice::WriteOnly);
-    Entry* entry = database->rootGroup()->findEntryByPath(entryPath);
+    QString entryPath;
+    if (parser->isSet(Clip::BestMatchOption)) {
+        EntrySearcher searcher;
+        const auto& searchTerm = args.at(1);
+        const auto results = searcher.search(QString("title:%1").arg(searchTerm), database->rootGroup(), true);
+        if (results.count() > 1) {
+            err << QObject::tr("Multiple entries matching:") << Qt::endl;
+            for (const Entry* result : results) {
+                err << result->path().prepend('/') << Qt::endl;
+            }
+            return EXIT_FAILURE;
+        } else {
+            entryPath = (results.isEmpty()) ? searchTerm : results[0]->path().prepend('/');
+            out << QObject::tr("Using matching entry: %1").arg(entryPath) << Qt::endl;
+        }
+    } else {
+        entryPath = args.at(1);
+    }
+
+    auto* entry = database->rootGroup()->findEntryByPath(entryPath);
     if (!entry) {
-        errorTextStream << QObject::tr("Entry %1 not found.").arg(entryPath) << endl;
+        err << QObject::tr("Entry %1 not found.").arg(entryPath) << Qt::endl;
         return EXIT_FAILURE;
     }
 
+    if (parser->isSet(AttributeOption) && parser->isSet(TotpOption)) {
+        err << QObject::tr("ERROR: Please specify one of --attribute or --totp, not both.") << Qt::endl;
+        return EXIT_FAILURE;
+    }
+
+    QString selectedAttribute = parser->value(AttributeOption);
     QString value;
-    if (clipTotp) {
+    bool found = false;
+    if (parser->isSet(TotpOption) || selectedAttribute == "totp") {
         if (!entry->hasTotp()) {
-            errorTextStream << QObject::tr("Entry with path %1 has no TOTP set up.").arg(entryPath) << endl;
+            err << QObject::tr("Entry with path %1 has no TOTP set up.").arg(entryPath) << Qt::endl;
             return EXIT_FAILURE;
         }
 
+        selectedAttribute = "totp";
+        found = true;
         value = entry->totp();
+    } else if (Utils::EntryFieldNames.contains(selectedAttribute)) {
+        value = Utils::getTopLevelField(entry, selectedAttribute);
+        found = true;
     } else {
-        value = entry->password();
+        QStringList attrs = Utils::findAttributes(*entry->attributes(), selectedAttribute);
+        if (attrs.size() > 1) {
+            err << QObject::tr("ERROR: attribute %1 is ambiguous, it matches %2.")
+                       .arg(selectedAttribute, QLocale().createSeparatedList(attrs))
+                << Qt::endl;
+            return EXIT_FAILURE;
+        } else if (attrs.size() == 1) {
+            found = true;
+            selectedAttribute = attrs[0];
+            value = entry->attributes()->value(selectedAttribute);
+        }
+    }
+
+    if (!found) {
+        out << QObject::tr("Attribute \"%1\" not found.").arg(selectedAttribute) << Qt::endl;
+        return EXIT_FAILURE;
     }
 
     int exitCode = Utils::clipText(value);
@@ -87,27 +143,23 @@ int Clip::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<
         return exitCode;
     }
 
-    if (clipTotp) {
-        outputTextStream << QObject::tr("Entry's current TOTP copied to the clipboard!") << endl;
-    } else {
-        outputTextStream << QObject::tr("Entry's password copied to the clipboard!") << endl;
-    }
+    out << QObject::tr("Entry's \"%1\" attribute copied to the clipboard!").arg(selectedAttribute) << Qt::endl;
 
-    if (!timeoutSeconds) {
+    if (timeout <= 0) {
         return exitCode;
     }
 
     QString lastLine = "";
-    while (timeoutSeconds > 0) {
-        outputTextStream << '\r' << QString(lastLine.size(), ' ') << '\r';
-        lastLine = QObject::tr("Clearing the clipboard in %1 second(s)...", "", timeoutSeconds).arg(timeoutSeconds);
-        outputTextStream << lastLine << flush;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        --timeoutSeconds;
+    while (timeout > 0) {
+        out << '\r' << QString(lastLine.size(), ' ') << '\r';
+        lastLine = QObject::tr("Clearing the clipboard in %1 second(s)...", "", timeout).arg(timeout);
+        out << lastLine << Qt::flush;
+        Tools::sleep(1000);
+        --timeout;
     }
     Utils::clipText("");
-    outputTextStream << '\r' << QString(lastLine.size(), ' ') << '\r';
-    outputTextStream << QObject::tr("Clipboard cleared!") << endl;
+    out << '\r' << QString(lastLine.size(), ' ') << '\r';
+    out << QObject::tr("Clipboard cleared!") << Qt::endl;
 
     return EXIT_SUCCESS;
 }

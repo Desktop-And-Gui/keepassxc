@@ -21,10 +21,6 @@
 #include "config-keepassx.h"
 #include "core/Global.h"
 #include "gui/MessageBox.h"
-#include "updatecheck/UpdateChecker.h"
-#include <QDialog>
-#include <QScopedPointer>
-#include <QUrl>
 
 namespace Ui
 {
@@ -40,7 +36,7 @@ public:
     ~UpdateCheckDialog() override;
 
 public slots:
-    void showUpdateCheckResponse(bool status, const QString& version);
+    void showUpdateCheckResponse(bool hasUpdate, const QString& version);
 
 private:
     QScopedPointer<Ui::UpdateCheckDialog> m_ui;

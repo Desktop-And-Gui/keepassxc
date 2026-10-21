@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2026 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2013 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,6 +19,10 @@
 #include "MessageBox.h"
 
 #include <QCheckBox>
+#include <QHash>
+#include <QLayout>
+#include <QMap>
+#include <QPushButton>
 #include <QWindow>
 
 QWindow* MessageBox::m_overrideParent(nullptr);
@@ -64,6 +68,7 @@ void MessageBox::initializeButtonDefs()
         {Disable, {QMessageBox::tr("Disable"), QMessageBox::ButtonRole::AcceptRole}},
         {Merge, {QMessageBox::tr("Merge"), QMessageBox::ButtonRole::AcceptRole}},
         {Continue, {QMessageBox::tr("Continue"), QMessageBox::ButtonRole::AcceptRole}},
+        {ContinueWithWeakPass, {QMessageBox::tr("Continue with weak password"), QMessageBox::ButtonRole::AcceptRole}},
     };
 }
 
@@ -84,9 +89,12 @@ MessageBox::Button MessageBox::messageBox(QWidget* parent,
 {
     if (m_nextAnswer == MessageBox::NoButton) {
         QMessageBox msgBox(parent);
+        msgBox.setTextFormat(Qt::RichText);
         msgBox.setIcon(icon);
         msgBox.setWindowTitle(title);
-        msgBox.setText(text);
+        // Replace newlines with HTML line breaks
+        auto fixedText = text;
+        msgBox.setText(fixedText.replace("\n", "<br>"));
 
         if (m_overrideParent) {
             // Force the creation of the QWindow, without this windowHandle() will return nullptr
@@ -98,10 +106,10 @@ MessageBox::Button MessageBox::messageBox(QWidget* parent,
 
         for (uint64_t b = First; b <= Last; b <<= 1) {
             if (b & buttons) {
-                QString text = m_buttonDefs[static_cast<Button>(b)].first;
+                QString buttonText = m_buttonDefs[static_cast<Button>(b)].first;
                 QMessageBox::ButtonRole role = m_buttonDefs[static_cast<Button>(b)].second;
 
-                auto buttonPtr = msgBox.addButton(text, role);
+                auto buttonPtr = msgBox.addButton(buttonText, role);
                 m_addedButtonLookup.insert(buttonPtr, static_cast<Button>(b));
             }
         }
@@ -123,6 +131,7 @@ MessageBox::Button MessageBox::messageBox(QWidget* parent,
             msgBox.activateWindow();
             msgBox.raise();
         }
+        msgBox.layout()->setSizeConstraint(QLayout::SetMinimumSize);
         msgBox.exec();
 
         Button returnButton = m_addedButtonLookup[msgBox.clickedButton()];

@@ -19,6 +19,7 @@
 #define KEEPASSX_KDBX4WRITER_H
 
 #include "KdbxWriter.h"
+#include "format/KdbxXmlWriter.h"
 
 /**
  * KDBX4 writer implementation.
@@ -29,11 +30,10 @@ class Kdbx4Writer : public KdbxWriter
 
 public:
     bool writeDatabase(QIODevice* device, Database* db) override;
-    quint32 formatVersion() override;
 
 private:
     bool writeInnerHeaderField(QIODevice* device, KeePass2::InnerHeaderFieldID fieldId, const QByteArray& data);
-    void writeAttachments(QIODevice* device, Database* db);
+    KdbxXmlWriter::BinaryIdxMap writeAttachments(QIODevice* device, Database* db);
     static bool serializeVariantMap(const QVariantMap& map, QByteArray& outputBytes);
 };
 

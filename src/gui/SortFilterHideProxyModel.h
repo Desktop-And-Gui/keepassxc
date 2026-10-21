@@ -19,6 +19,7 @@
 #define KEEPASSX_SORTFILTERHIDEPROXYMODEL_H
 
 #include <QBitArray>
+#include <QCollator>
 #include <QSortFilterProxyModel>
 
 class SortFilterHideProxyModel : public QSortFilterProxyModel
@@ -32,9 +33,11 @@ public:
 
 protected:
     bool filterAcceptsColumn(int sourceColumn, const QModelIndex& sourceParent) const override;
+    bool lessThan(const QModelIndex& left, const QModelIndex& right) const override;
 
 private:
     QBitArray m_hiddenColumns;
+    QCollator m_collator;
 };
 
 #endif // KEEPASSX_SORTFILTERHIDEPROXYMODEL_H

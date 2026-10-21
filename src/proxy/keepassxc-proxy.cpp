@@ -16,14 +16,13 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "NativeMessagingHost.h"
+#include "NativeMessagingProxy.h"
 #include <QCoreApplication>
+
 #include <iostream>
 
 #ifndef Q_OS_WIN
-#include <initializer_list>
 #include <signal.h>
-#include <unistd.h>
 
 // (C) Gist: https://gist.github.com/azadkuh/a2ac6869661ebd3f8588
 void ignoreUnixSignals(std::initializer_list<int> ignoreSignals)
@@ -79,6 +78,6 @@ int main(int argc, char* argv[])
 #else
     SetConsoleCtrlHandler(static_cast<PHANDLER_ROUTINE>(ConsoleHandler), TRUE);
 #endif
-    NativeMessagingHost host;
+    NativeMessagingProxy proxy;
     return a.exec();
 }

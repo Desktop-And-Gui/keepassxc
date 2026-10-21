@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>437</width>
-    <height>300</height>
+    <height>316</height>
    </rect>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
@@ -26,7 +26,7 @@
    <item>
     <widget class="QRadioButton" name="defaultIconsRadio">
      <property name="text">
-      <string>&amp;Use default icon</string>
+      <string>Use default icon</string>
      </property>
     </widget>
    </item>
@@ -48,17 +48,33 @@
       <enum>QListView::Adjust</enum>
      </property>
      <property name="spacing">
-      <number>8</number>
+      <number>4</number>
      </property>
      <property name="viewMode">
-      <enum>QListView::IconMode</enum>
+      <enum>QListView::ListMode</enum>
      </property>
     </widget>
    </item>
    <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeType">
+      <enum>QSizePolicy::Fixed</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>10</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
     <widget class="QRadioButton" name="customIconsRadio">
      <property name="text">
-      <string>Use custo&amp;m icon</string>
+      <string>Use custom icon</string>
      </property>
     </widget>
    </item>
@@ -80,26 +96,48 @@
       <enum>QListView::Adjust</enum>
      </property>
      <property name="spacing">
-      <number>8</number>
+      <number>4</number>
      </property>
      <property name="viewMode">
-      <enum>QListView::IconMode</enum>
+      <enum>QListView::ListMode</enum>
      </property>
     </widget>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="customIconButtonsHorizontalLayout">
+    <layout class="QHBoxLayout" name="customIconButtonsHorizontalLayout" stretch="0,0,0,0">
      <item>
       <widget class="QPushButton" name="addButton">
        <property name="text">
-        <string>Add custom icon</string>
+        <string>Choose icon…</string>
        </property>
       </widget>
      </item>
      <item>
-      <widget class="QPushButton" name="deleteButton">
-       <property name="text">
-        <string>Delete custom icon</string>
+      <spacer name="horizontalSpacer_2">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QLineEdit" name="faviconURL">
+       <property name="minimumSize">
+        <size>
+         <width>200</width>
+         <height>0</height>
+        </size>
+       </property>
+       <property name="toolTip">
+        <string>Set the URL to use to search for a favicon</string>
+       </property>
+       <property name="placeholderText">
+        <string>Favicon URL</string>
        </property>
       </widget>
      </item>
@@ -151,7 +189,7 @@
         <string notr="true">padding: 4px 10px</string>
        </property>
        <property name="text">
-        <string>Apply icon &amp;to ...</string>
+        <string>Apply icon to…</string>
        </property>
       </widget>
      </item>
@@ -165,7 +203,8 @@
   <tabstop>customIconsRadio</tabstop>
   <tabstop>customIconsView</tabstop>
   <tabstop>addButton</tabstop>
-  <tabstop>deleteButton</tabstop>
+  <tabstop>faviconURL</tabstop>
+  <tabstop>faviconButton</tabstop>
   <tabstop>applyIconToPushButton</tabstop>
  </tabstops>
  <resources/>

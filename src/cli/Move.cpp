@@ -15,16 +15,13 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cstdlib>
-#include <stdio.h>
-
 #include "Move.h"
 
-#include "cli/TextStream.h"
-#include "cli/Utils.h"
-#include "core/Database.h"
-#include "core/Entry.h"
+#include "Utils.h"
+#include "core/Global.h"
 #include "core/Group.h"
+
+#include <QCommandLineParser>
 
 Move::Move()
 {
@@ -34,14 +31,12 @@ Move::Move()
     positionalArguments.append({QString("group"), QObject::tr("Path of the destination group."), QString("")});
 }
 
-Move::~Move()
-{
-}
+Move::~Move() = default;
 
 int Move::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
-    TextStream outputTextStream(Utils::STDOUT, QIODevice::WriteOnly);
-    TextStream errorTextStream(Utils::STDERR, QIODevice::WriteOnly);
+    auto& out = Utils::STDOUT;
+    auto& err = Utils::STDERR;
 
     const QStringList args = parser->positionalArguments();
     const QString& entryPath = args.at(1);
@@ -49,18 +44,18 @@ int Move::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<
 
     Entry* entry = database->rootGroup()->findEntryByPath(entryPath);
     if (!entry) {
-        errorTextStream << QObject::tr("Could not find entry with path %1.").arg(entryPath) << endl;
+        err << QObject::tr("Could not find entry with path %1.").arg(entryPath) << Qt::endl;
         return EXIT_FAILURE;
     }
 
     Group* destinationGroup = database->rootGroup()->findGroupByPath(destinationPath);
     if (!destinationGroup) {
-        errorTextStream << QObject::tr("Could not find group with path %1.").arg(destinationPath) << endl;
+        err << QObject::tr("Could not find group with path %1.").arg(destinationPath) << Qt::endl;
         return EXIT_FAILURE;
     }
 
     if (destinationGroup == entry->parent()) {
-        errorTextStream << QObject::tr("Entry is already in group %1.").arg(destinationPath) << endl;
+        err << QObject::tr("Entry is already in group %1.").arg(destinationPath) << Qt::endl;
         return EXIT_FAILURE;
     }
 
@@ -69,12 +64,11 @@ int Move::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<
     entry->endUpdate();
 
     QString errorMessage;
-    if (!database->save(&errorMessage, true, false)) {
-        errorTextStream << QObject::tr("Writing the database failed %1.").arg(errorMessage) << endl;
+    if (!database->save(Database::Atomic, {}, &errorMessage)) {
+        err << QObject::tr("Writing the database failed %1.").arg(errorMessage) << Qt::endl;
         return EXIT_FAILURE;
     }
 
-    outputTextStream << QObject::tr("Successfully moved entry %1 to group %2.").arg(entry->title(), destinationPath)
-                     << endl;
+    out << QObject::tr("Successfully moved entry %1 to group %2.").arg(entry->title(), destinationPath) << Qt::endl;
     return EXIT_SUCCESS;
 }

@@ -20,7 +20,6 @@
 
 #include <QPointer>
 #include <QStyledItemDelegate>
-#include <QWidget>
 
 class CategoryListWidgetDelegate;
 class QListWidget;
@@ -36,7 +35,7 @@ class CategoryListWidget : public QWidget
 
 public:
     CategoryListWidget(QWidget* parent = nullptr);
-    ~CategoryListWidget();
+    ~CategoryListWidget() override;
 
     int currentCategory();
     void setCurrentCategory(int index);

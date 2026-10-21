@@ -20,6 +20,7 @@
 #define AGENTSETTINGSWIDGET_H
 
 #include <QScopedPointer>
+#include <QUuid>
 #include <QWidget>
 
 namespace Ui
@@ -37,6 +38,7 @@ public:
 public slots:
     void loadSettings();
     void saveSettings();
+    void toggleSettingsEnabled();
 
 private:
     QScopedPointer<Ui::AgentSettingsWidget> m_ui;

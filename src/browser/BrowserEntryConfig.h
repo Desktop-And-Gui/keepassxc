@@ -16,14 +16,12 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef BROWSERENTRYCONFIG_H
-#define BROWSERENTRYCONFIG_H
+#ifndef KEEPASSXC_BROWSERENTRYCONFIG_H
+#define KEEPASSXC_BROWSERENTRYCONFIG_H
 
-#include "Variant.h"
-#include <QtCore/QObject>
-#include <QtCore/QSet>
-#include <QtCore/QString>
-#include <QtCore/QStringList>
+#include <QObject>
+#include <QSet>
+#include <QString>
 
 class Entry;
 
@@ -57,4 +55,4 @@ private:
     QString m_realm;
 };
 
-#endif // BROWSERENTRYCONFIG_H
+#endif // KEEPASSXC_BROWSERENTRYCONFIG_H

@@ -18,8 +18,6 @@
 #ifndef KEEPASSXC_COMPARE_H
 #define KEEPASSXC_COMPARE_H
 
-#include <QDateTime>
-
 #include "core/Clock.h"
 
 enum CompareItemOption
@@ -33,14 +31,6 @@ enum CompareItemOption
 };
 Q_DECLARE_FLAGS(CompareItemOptions, CompareItemOption)
 Q_DECLARE_OPERATORS_FOR_FLAGS(CompareItemOptions)
-
-class QColor;
-/*!
- * \return true when both color match
- *
- * Comparison converts both into the cmyk-model
- */
-bool operator<(const QColor& lhs, const QColor& rhs);
 
 template <typename Type> inline short compareGeneric(const Type& lhs, const Type& rhs, CompareItemOptions)
 {

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,19 +18,12 @@
 #include "DatabaseSettingsWidget.h"
 #include "core/Database.h"
 
-#include <utility>
-
-#include <QTimer>
-#include <QWidget>
-
 DatabaseSettingsWidget::DatabaseSettingsWidget(QWidget* parent)
     : SettingsWidget(parent)
 {
 }
 
-DatabaseSettingsWidget::~DatabaseSettingsWidget()
-{
-}
+DatabaseSettingsWidget::~DatabaseSettingsWidget() = default;
 
 /**
  * Load the database to be configured by this page and initialize the page.
@@ -38,7 +31,7 @@ DatabaseSettingsWidget::~DatabaseSettingsWidget()
  *
  * @param db database object to be configured
  */
-void DatabaseSettingsWidget::load(QSharedPointer<Database> db)
+void DatabaseSettingsWidget::loadSettings(QSharedPointer<Database> db)
 {
     m_db = std::move(db);
     initialize();
@@ -48,4 +41,3 @@ const QSharedPointer<Database> DatabaseSettingsWidget::getDatabase() const
 {
     return m_db;
 }
-
